@@ -5,6 +5,7 @@ import { getPublicClient } from "../lib/clients.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { resolveTokenInput as resolveTokenInputFromRegistry } from "../lib/token-registry.js";
 import type { ResolvedTokenInput } from "../lib/token-registry.js";
+import { fetchAgniPoolFromSubgraph } from "../lib/subgraph.js";
 import type { Tool } from "../types.js";
 
 interface SwapQuoteDeps {
@@ -701,7 +702,11 @@ const defaultPoolDeps: PoolLiquidityDeps = {
       total_liquidity_usd: asFiniteNumber(pair.liquidity?.usd)
     };
   },
-  readPoolFromSubgraph: async () => null,
+  readPoolFromSubgraph: async ({ poolAddress, provider }) => {
+    // Agni V3 has a public subgraph; Merchant Moe does not yet.
+    if (provider !== "agni") return null;
+    return fetchAgniPoolFromSubgraph(poolAddress);
+  },
   readPoolFromIndexer: async () => null,
   getTokenPrices: async ({ network, tokenAddresses }) => {
     const normalized = [...new Set(tokenAddresses.map((address) => normalizeAddressLower(address)))];
