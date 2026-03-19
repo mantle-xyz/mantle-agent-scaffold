@@ -23,7 +23,12 @@ const defaultDeps: DiagnosticsDeps = {
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(json.error.message ?? "RPC error");
+      throw new MantleMcpError(
+        "RPC_ERROR",
+        json.error.message ?? "RPC error",
+        "Check the RPC endpoint URL and ensure it is reachable.",
+        { rpc_code: json.error.code ?? null, retryable: true }
+      );
     }
     return json;
   },

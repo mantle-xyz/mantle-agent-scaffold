@@ -35,7 +35,12 @@ const defaultDeps: AccountDeps = {
   resolveTokenInput: (token, network) => resolveTokenInputFromRegistry(token, network ?? "mainnet"),
   readTokenBalance: async (client, tokenAddress, owner) => {
     if (!client.readContract) {
-      throw new Error("readContract not implemented on client");
+      throw new MantleMcpError(
+        "CLIENT_ERROR",
+        "readContract not implemented on client.",
+        "Verify the RPC client supports contract reads.",
+        { method: "balanceOf" }
+      );
     }
     return (await client.readContract({
       address: tokenAddress as `0x${string}`,
@@ -46,7 +51,12 @@ const defaultDeps: AccountDeps = {
   },
   readTokenAllowance: async (client, tokenAddress, owner, spender) => {
     if (!client.readContract) {
-      throw new Error("readContract not implemented on client");
+      throw new MantleMcpError(
+        "CLIENT_ERROR",
+        "readContract not implemented on client.",
+        "Verify the RPC client supports contract reads.",
+        { method: "allowance" }
+      );
     }
     return (await client.readContract({
       address: tokenAddress as `0x${string}`,
@@ -89,7 +99,14 @@ export async function getBalance(
   const [balanceWei, blockNumber] = await Promise.all([
     client.getBalance
       ? client.getBalance({ address: address as `0x${string}` })
-      : Promise.reject(new Error("getBalance not implemented on client")),
+      : Promise.reject(
+          new MantleMcpError(
+            "CLIENT_ERROR",
+            "getBalance not implemented on client.",
+            "Verify the RPC client supports balance queries.",
+            { method: "getBalance" }
+          )
+        ),
     client.getBlockNumber()
   ]);
 
@@ -119,7 +136,12 @@ export async function getTokenBalances(
       try {
         const resolved = await resolvedDeps.resolveTokenInput(token, network);
         if (resolved.address === "native") {
-          throw new Error("native token is not supported in token balance reads; use mantle_getBalance");
+          throw new MantleMcpError(
+            "UNSUPPORTED_TOKEN",
+            "Native token is not supported in token balance reads.",
+            "Use mantle_getBalance for native MNT balance.",
+            { token, resolved_address: "native" }
+          );
         }
         const balanceRaw = await resolvedDeps.readTokenBalance(client, resolved.address, address);
         return {
@@ -173,7 +195,12 @@ export async function getAllowances(
         const spender = requireAddress(pair.spender, "spender");
         const token = await resolvedDeps.resolveTokenInput(tokenInput, network);
         if (token.address === "native") {
-          throw new Error("native token has no allowance mapping");
+          throw new MantleMcpError(
+            "UNSUPPORTED_TOKEN",
+            "Native token has no allowance mapping.",
+            "Allowances apply only to ERC-20 tokens, not native MNT.",
+            { token: tokenInput, resolved_address: "native" }
+          );
         }
         const allowanceRaw = await resolvedDeps.readTokenAllowance(
           client,
