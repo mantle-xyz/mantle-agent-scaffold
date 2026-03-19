@@ -198,6 +198,118 @@ agent = Agent(
 )
 ```
 
+### Production Pattern: Multi-Agent Orchestrator
+
+In production systems, agents often use an orchestrator that delegates to specialist sub-agents. Each specialist can have its own MCP servers configured via YAML manifests. This pattern was validated in a real Telegram bot integration:
+
+```python
+# manifests/research.yaml — declarative MCP server config per agent
+"""
+name: research
+model:
+  primary: openai:gpt-4o
+tools:
+  - web_search
+  - crypto_price
+mcp_servers:
+  - tavily
+  - mantle          # <-- declares which MCP servers this agent needs
+"""
+```
+
+The agent factory reads the manifest and connects MCP toolsets automatically:
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerStdio
+
+
+# MCP server registry — one entry per server
+MCP_SERVERS = {
+    "mantle": MCPServerStdio(
+        "node",
+        args=["/app/mantle-mcp/dist/src/index.js"],
+        env={
+            "MANTLE_MCP_TRANSPORT": "stdio",
+            "MANTLE_RPC_URL": "https://rpc.mantle.xyz",
+        },
+        timeout=30,
+    ),
+    "tavily": MCPServerStdio("npx", args=["-y", "tavily-mcp"], timeout=30),
+}
+
+
+def build_agent(manifest) -> Agent:
+    """Build agent with MCP toolsets from manifest declaration."""
+    # Resolve MCP servers declared in the manifest
+    toolsets = [MCP_SERVERS[name] for name in manifest.mcp_servers if name in MCP_SERVERS]
+
+    agent = Agent(
+        model=manifest.model,
+        instructions=manifest.system_prompt,
+        toolsets=toolsets or None,
+    )
+
+    # Register non-MCP tools from a tool registry
+    for tool_fn in get_tools(manifest.tools):
+        agent.tool(tool_fn)
+
+    return agent
+```
+
+#### Contextual Instructions
+
+LLMs may ignore MCP tools if they don't know when to use them. Inject context-specific instructions when the user message matches relevant keywords:
+
+```python
+MANTLE_KEYWORDS = ["mantle", "mnt", "agni", "aave mantle", "defi mantle"]
+
+MANTLE_INSTRUCTIONS = """Mantle L2 (via MCP tools — 19 instruments, real on-chain data):
+- Gas token = MNT, not ETH.
+- Use mantle_resolveAddress/mantle_resolveToken to verify addresses. Never guess.
+- Use mantle_getTokenPrices for token prices. Don't rely on memory.
+- Portfolio: mantle_getBalance (native) + mantle_getTokenBalances (ERC-20).
+- DeFi: mantle_getSwapQuote, mantle_getPoolLiquidity, mantle_getLendingMarkets.
+- All tools are read-only — analyze and recommend, never execute transactions."""
+
+
+@coordinator.system_prompt
+async def inject_mantle_context(ctx):
+    """Inject Mantle instructions only when the message is Mantle-related."""
+    message = (ctx.deps.current_message or "").lower()
+    if any(kw in message for kw in MANTLE_KEYWORDS):
+        return MANTLE_INSTRUCTIONS
+    return ""
+```
+
+#### Docker Deployment
+
+Mount the pre-built `dist/` directory as a read-only volume — no need to install Node.js dependencies at runtime:
+
+```yaml
+# docker-compose.yml
+services:
+  bot:
+    build: .
+    volumes:
+      - ./mantle-mcp-dist:/app/mantle-mcp:ro  # read-only mount
+    environment:
+      - MANTLE_MCP_PATH=/app/mantle-mcp/src/index.js
+```
+
+#### Security Checklist
+
+- **Minimal subprocess env**: only pass `PATH`, `HOME`, `MANTLE_MCP_TRANSPORT`, `MANTLE_RPC_URL` to the MCP subprocess — never leak API keys or database credentials
+- **Path validation**: verify `MANTLE_MCP_PATH` stays within the expected directory before spawning the subprocess
+- **Read-only mount**: use `:ro` in Docker to prevent code modification from inside the container
+- **Graceful degradation**: if the MCP server fails to start, the agent should continue working without Mantle tools
+
+#### Lessons Learned
+
+1. **MCP toolsets must be explicitly connected** — declaring `mcp_servers` in a manifest is not enough. The agent factory must pass them as `toolsets=` to the `Agent()` constructor.
+2. **LLMs need prompting to use MCP tools** — without contextual instructions mentioning `mantle_*` tool names, the LLM will default to familiar tools like web search even when MCP tools would give better results.
+3. **First MCP call is slow** — the MCP subprocess starts on first use (not at agent creation). Budget 5–15 seconds for the initial `listTools` handshake in timeout settings.
+
 ### Key Notes
 
 - **Lifecycle**: `async with agent` manages MCP subprocess start/stop. Without it, tools are not available.
