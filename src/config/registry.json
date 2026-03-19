@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "network": "mantle",
-  "updated_at": "2026-02-28T00:00:00Z",
+  "updated_at": "2026-03-19T00:00:00Z",
   "notes": "Curated Mantle registry used by mantle_resolveAddress.",
   "chain_ids": {
     "mainnet": 5000,
@@ -163,6 +163,90 @@
       }
     },
     {
+      "key": "AGNI_FACTORY",
+      "label": "Agni V3 Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Agni Factory"],
+      "source": {
+        "url": "https://github.com/agni-protocol/contracts/blob/main/deployments/mantleMainnet.json",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "AGNI_QUOTER",
+      "label": "Agni QuoterV2",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xc4aaDc921E1cdb66c5300Bc158a313292923C0cb",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Agni Quoter"],
+      "source": {
+        "url": "https://github.com/agni-protocol/contracts/blob/main/deployments/mantleMainnet.json",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_FACTORY",
+      "label": "Merchant Moe LB Factory v2.2",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xa6630671775c4EA2743840F9A5016dCf2A104054",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Merchant Moe Factory"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_QUOTER",
+      "label": "Merchant Moe LB Quoter v2.2",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x501b8AFd35df20f531fF45F6f695793AC3316c85",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Merchant Moe Quoter"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "AAVE_V3_ORACLE",
+      "label": "Aave V3 Oracle",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x47a063CfDa980532267970d478EC340C0F80E8df",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Aave Oracle"],
+      "source": {
+        "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/AaveV3Mantle.sol",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "MANTLE_L1_STANDARD_BRIDGE",
+      "label": "Mantle L1 Standard Bridge",
+      "environment": "mainnet",
+      "category": "bridge",
+      "address": "0x95fC37A27a2f68e3A647CDc081F0A89bb47c3012",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Standard Bridge L1"],
+      "source": {
+        "url": "https://etherscan.io/address/0x95fC37A27a2f68e3A647CDc081F0A89bb47c3012",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
       "key": "MANTLE_L2_STANDARD_BRIDGE",
       "label": "Mantle L2 Standard Bridge",
       "environment": "mainnet",
@@ -174,6 +258,34 @@
       "source": {
         "url": "https://docs.mantle.xyz/network/system-information/off-chain-system/key-l2-contract-address",
         "retrieved_at": "2026-02-28T00:00:00Z"
+      }
+    },
+    {
+      "key": "MANTLE_L2_CROSS_DOMAIN_MESSENGER",
+      "label": "Mantle L2 Cross-Domain Messenger",
+      "environment": "mainnet",
+      "category": "bridge",
+      "address": "0x4200000000000000000000000000000000000007",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["L2 Messenger"],
+      "source": {
+        "url": "https://github.com/mantlenetworkio/mantle-v2/blob/develop/packages/contracts-bedrock/contracts/libraries/Predeploys.sol",
+        "retrieved_at": "2026-03-19T00:00:00Z"
+      }
+    },
+    {
+      "key": "MANTLE_L2_TO_L1_MESSAGE_PASSER",
+      "label": "Mantle L2 to L1 Message Passer",
+      "environment": "mainnet",
+      "category": "bridge",
+      "address": "0x4200000000000000000000000000000000000016",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["L2 Message Passer"],
+      "source": {
+        "url": "https://github.com/mantlenetworkio/mantle-v2/blob/develop/packages/contracts-bedrock/contracts/libraries/Predeploys.sol",
+        "retrieved_at": "2026-03-19T00:00:00Z"
       }
     },
     {
