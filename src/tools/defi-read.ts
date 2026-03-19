@@ -5,7 +5,8 @@ import { getPublicClient } from "../lib/clients.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { resolveTokenInput as resolveTokenInputFromRegistry } from "../lib/token-registry.js";
 import type { ResolvedTokenInput } from "../lib/token-registry.js";
-import { fetchAgniPoolFromSubgraph } from "../lib/subgraph.js";
+import { fetchAgniPoolFromSubgraph, fetchMerchantMoePoolFromBarn, fetchAaveMarketsFromApi } from "../lib/subgraph.js";
+import type { ExternalLendingMarket } from "../lib/subgraph.js";
 import type { Tool } from "../types.js";
 
 interface SwapQuoteDeps {
@@ -703,9 +704,9 @@ const defaultPoolDeps: PoolLiquidityDeps = {
     };
   },
   readPoolFromSubgraph: async ({ poolAddress, provider }) => {
-    // Agni V3 has a public subgraph; Merchant Moe does not yet.
-    if (provider !== "agni") return null;
-    return fetchAgniPoolFromSubgraph(poolAddress);
+    if (provider === "agni") return fetchAgniPoolFromSubgraph(poolAddress);
+    if (provider === "merchant_moe") return fetchMerchantMoePoolFromBarn(poolAddress);
+    return null;
   },
   readPoolFromIndexer: async () => null,
   getTokenPrices: async ({ network, tokenAddresses }) => {
@@ -1042,7 +1043,20 @@ const defaultLendingDeps: LendingMarketsDeps = {
       );
     }
   },
-  marketProviderFromSubgraph: async () => [],
+  marketProviderFromSubgraph: async () => {
+    const markets = await fetchAaveMarketsFromApi();
+    return markets.map((m: ExternalLendingMarket) => ({
+      protocol: m.protocol,
+      asset: m.asset,
+      asset_address: m.asset_address,
+      supply_apy: m.supply_apy ?? 0,
+      borrow_apy_variable: m.borrow_apy_variable ?? 0,
+      borrow_apy_stable: m.borrow_apy_stable,
+      tvl_usd: m.tvl_usd,
+      ltv: m.ltv,
+      liquidation_threshold: m.liquidation_threshold,
+    }));
+  },
   marketProviderFromIndexer: async () => [],
   now: () => new Date().toISOString()
 };
