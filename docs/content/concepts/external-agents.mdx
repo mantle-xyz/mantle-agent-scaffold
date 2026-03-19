@@ -68,3 +68,139 @@ External agents should follow this sequence:
 - Treat `null` price as unknown data.
 - For custom endpoints, rely on built-in endpoint policy enforcement.
 - Use diagnostics tools before declaring endpoint health.
+
+## Python Integration with pydantic-ai
+
+[pydantic-ai](https://ai.pydantic.dev/) connects to mantle-mcp via `MCPServerStdio`. The agent discovers all 19 tools automatically through the MCP protocol — no manual tool definitions needed.
+
+### Minimal Example
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerStdio
+
+mantle_server = MCPServerStdio(
+    "node",
+    args=["path/to/mantle-agent-scaffold/dist/src/index.js"],
+    env={
+        "MANTLE_MCP_TRANSPORT": "stdio",
+        "MANTLE_RPC_URL": "https://rpc.mantle.xyz",
+    },
+    timeout=30,
+)
+
+agent = Agent(
+    "anthropic:claude-sonnet-4-20250514",
+    toolsets=[mantle_server],
+    instructions="You are a Mantle L2 assistant. Gas token is MNT, not ETH.",
+)
+
+
+async def main():
+    async with agent:
+        result = await agent.run("What is the current gas price on Mantle?")
+    print(result.output)
+```
+
+The `async with agent` context manager starts the MCP server subprocess, calls `listTools` to discover available tools, and shuts it down on exit. Inside the context, `agent.run()` can invoke any of the 19 mantle-mcp tools as needed.
+
+### Skill-First Integration
+
+For production agents, load skill content into the system prompt so the LLM follows Mantle-specific workflows and guardrails:
+
+```python
+from pathlib import Path
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerStdio
+
+SKILLS_DIR = Path("path/to/mantle-agent-scaffold/skills/skills")
+
+mantle_server = MCPServerStdio(
+    "node",
+    args=["path/to/mantle-agent-scaffold/dist/src/index.js"],
+    env={"MANTLE_MCP_TRANSPORT": "stdio"},
+    timeout=30,
+)
+
+
+def load_skill(name: str) -> str:
+    """Load a skill's SKILL.md content."""
+    skill_path = SKILLS_DIR / name / "SKILL.md"
+    return skill_path.read_text()
+
+
+agent = Agent(
+    "anthropic:claude-sonnet-4-20250514",
+    toolsets=[mantle_server],
+    instructions=(
+        "You are a Mantle L2 DeFi assistant. "
+        "Always follow the skill workflow below.\n\n"
+        + load_skill("mantle-portfolio-analyst")
+    ),
+)
+
+
+async def main():
+    async with agent:
+        result = await agent.run(
+            "Analyze the portfolio for 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        )
+    print(result.output)
+```
+
+### Dynamic Skill Selection
+
+For agents that handle multiple task types, select the skill at runtime based on user intent:
+
+```python
+SKILL_ROUTING = {
+    "portfolio": "mantle-portfolio-analyst",
+    "swap": "mantle-defi-operator",
+    "risk": "mantle-risk-evaluator",
+    "debug": "mantle-readonly-debugger",
+    "network": "mantle-network-primer",
+    "address": "mantle-address-registry-navigator",
+}
+
+
+def select_skill(user_message: str) -> str | None:
+    """Match user intent to the narrowest applicable skill."""
+    msg = user_message.lower()
+    for keyword, skill_name in SKILL_ROUTING.items():
+        if keyword in msg:
+            return skill_name
+    return None
+```
+
+This follows the skill-first protocol: select the narrowest matching skill, load its checklist, then execute MCP tools with the skill's guardrails applied.
+
+### Multiple MCP Servers
+
+pydantic-ai supports multiple MCP servers in a single agent. Combine mantle-mcp with other tool servers:
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerStdio
+
+mantle = MCPServerStdio(
+    "node",
+    args=["path/to/mantle-agent-scaffold/dist/src/index.js"],
+    env={"MANTLE_MCP_TRANSPORT": "stdio"},
+    timeout=30,
+)
+
+# Add other MCP servers as needed
+tavily = MCPServerStdio("npx", args=["-y", "tavily-mcp"], timeout=30)
+
+agent = Agent(
+    "anthropic:claude-sonnet-4-20250514",
+    toolsets=[mantle, tavily],
+)
+```
+
+### Key Notes
+
+- **Lifecycle**: `async with agent` manages MCP subprocess start/stop. Without it, tools are not available.
+- **Tool discovery**: all 19 mantle-mcp tools are registered automatically via the MCP `listTools` handshake.
+- **Error handling**: tool errors return structured payloads with `code`, `message`, `suggestion`, and `details` fields.
+- **No private keys**: mantle-mcp is read-only. Transaction tools return unsigned payloads only.
