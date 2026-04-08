@@ -28,9 +28,10 @@ import {
   whitelistLabel
 } from "../config/protocols.js";
 import type { Tool, Network } from "../types.js";
+import { CHAIN_CONFIGS } from "../config/chains.js";
 
 // ABIs
-import { WMNT_ABI, WMNT_ADDRESS } from "../lib/abis/wmnt.js";
+import { WMNT_ABI } from "../lib/abis/wmnt.js";
 import { V3_SWAP_ROUTER_ABI, V3_POSITION_MANAGER_ABI } from "../lib/abis/uniswap-v3.js";
 import { LB_ROUTER_ABI, MOE_ROUTER_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-pool.js";
@@ -39,9 +40,18 @@ import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-
 // Constants
 // ---------------------------------------------------------------------------
 
-const MANTLE_CHAIN_ID = 5000;
 const DEFAULT_DEADLINE_SECONDS = 1200; // 20 minutes
 const MAX_UINT256 = 2n ** 256n - 1n;
+
+/** Derive chain ID from network config instead of hardcoding. */
+function chainId(network: Network): number {
+  return CHAIN_CONFIGS[network].chain_id;
+}
+
+/** Derive WMNT address from network config instead of hardcoding. */
+function wmntAddress(network: Network): string {
+  return CHAIN_CONFIGS[network].wrapped_mnt;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -259,7 +269,7 @@ export async function buildApprove(
       to: resolved.address,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings,
     built_at_utc: d.now()
@@ -289,10 +299,10 @@ export async function buildWrapMnt(
     intent: "wrap_mnt",
     human_summary: `Wrap ${amountDecimal} MNT → WMNT`,
     unsigned_tx: {
-      to: WMNT_ADDRESS,
+      to: wmntAddress(network),
       data,
       value: amountRaw.toString(),
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [],
     built_at_utc: d.now()
@@ -323,10 +333,10 @@ export async function buildUnwrapMnt(
     intent: "unwrap_mnt",
     human_summary: `Unwrap ${amountDecimal} WMNT → MNT`,
     unsigned_tx: {
-      to: WMNT_ADDRESS,
+      to: wmntAddress(network),
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [],
     built_at_utc: d.now()
@@ -461,7 +471,7 @@ function buildV3Swap(params: {
       to: routerAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings,
     built_at_utc: now
@@ -527,7 +537,7 @@ function buildMoeSwap(params: {
       to: routerAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings,
     built_at_utc: now
@@ -705,7 +715,7 @@ function buildV3AddLiquidity(params: {
       to: positionManager,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings,
     built_at_utc: now
@@ -793,7 +803,7 @@ function buildMoeAddLiquidity(params: {
       to: routerAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [],
     built_at_utc: now
@@ -883,7 +893,7 @@ export async function buildRemoveLiquidity(
       to: routerAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       "amountXMin and amountYMin are 0. Consider setting minimum outputs to avoid MEV."
@@ -964,7 +974,7 @@ function buildV3RemoveLiquidity(params: {
       to: positionManager,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       "amount0Min and amount1Min are 0. Consider setting minimum outputs to avoid MEV."
@@ -1017,7 +1027,7 @@ export async function buildAaveSupply(
       to: poolAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       `Ensure ${asset.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
@@ -1077,7 +1087,7 @@ export async function buildAaveBorrow(
       to: poolAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       "Ensure you have sufficient collateral deposited before borrowing.",
@@ -1140,7 +1150,7 @@ export async function buildAaveRepay(
       to: poolAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       `Ensure ${asset.symbol} is approved for the Aave Pool (${poolAddress}) before repaying.`
@@ -1192,7 +1202,7 @@ export async function buildAaveWithdraw(
       to: poolAddress,
       data,
       value: "0",
-      chainId: MANTLE_CHAIN_ID
+      chainId: chainId(network)
     },
     warnings: [
       "Withdrawing collateral may lower your health factor. Check before proceeding."

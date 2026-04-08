@@ -108,13 +108,27 @@
     },
     {
       "key": "MERCHANT_MOE_ROUTER",
+      "label": "Merchant Moe MoeRouter (V1 swap)",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xeaEE7EE68874218c3558b40063c42B82D3E7232a",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Merchant Moe Router", "MoeRouter"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-02-28T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_LB_ROUTER",
       "label": "Merchant Moe LB Router v2.2",
       "environment": "mainnet",
       "category": "defi",
-      "address": "0xeaEE7EE6886b7B4D35bcCC1345dCd4D135D2D1dC",
+      "address": "0x013e138EF6008ae5FDFDE29700e3f2Bc61d21E3a",
       "status": "active",
       "is_official": true,
-      "aliases": ["Merchant Moe Router"],
+      "aliases": ["LB Router", "Liquidity Book Router"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
         "retrieved_at": "2026-02-28T00:00:00Z"
