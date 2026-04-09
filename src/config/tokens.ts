@@ -155,6 +155,12 @@ export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
       decimals: 18,
       name: "ELSA",
       symbol: "ELSA"
+    },
+    VOOI: {
+      address: "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1",
+      decimals: 18,
+      name: "VOOI",
+      symbol: "VOOI"
     }
   },
   sepolia: {

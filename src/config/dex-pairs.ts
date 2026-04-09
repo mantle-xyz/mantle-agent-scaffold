@@ -67,7 +67,8 @@ export const TOKENS = {
   MOE: "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
   USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
   BSB: "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95",
-  ELSA: "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA"
+  ELSA: "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA",
+  VOOI: "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1"
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -255,6 +256,13 @@ const FLUXION_PAIRS: V3Pair[] = [
     tokenA: "ELSA", tokenB: "USDT0",
     tokenAAddress: TOKENS.ELSA, tokenBAddress: TOKENS.USDT0,
     pool: "0xe855dae59c7abfedb47d4ae3bb0faa0b1c52a2bc",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDT0", tokenB: "VOOI",
+    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.VOOI,
+    pool: "0x2305ad92740d186bf3834d4cca2eee1b3d5fa3fe",
     feeTier: 3000
   },
 
