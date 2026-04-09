@@ -24,6 +24,7 @@ describe("server wiring", () => {
       "mantle_getPoolLiquidity",
       "mantle_getPoolOpportunities",
       "mantle_getProtocolTvl",
+      "mantle_getSwapPairs",
       "mantle_getSwapQuote",
       "mantle_getTokenBalances",
       "mantle_getTokenInfo",

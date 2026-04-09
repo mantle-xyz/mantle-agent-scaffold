@@ -35,6 +35,15 @@ import {
   aaveReserveSymbols,
   type AaveReserveAsset
 } from "../config/aave-reserves.js";
+import {
+  findPair,
+  findPairByAddress,
+  listPairs,
+  listAllPairs,
+  type DexPair,
+  type MoePair,
+  type V3Pair
+} from "../config/dex-pairs.js";
 
 // ABIs
 import { WMNT_ABI } from "../lib/abis/wmnt.js";
@@ -301,7 +310,7 @@ export async function buildApprove(
     unsigned_tx: {
       to: resolved.address,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings,
@@ -334,7 +343,7 @@ export async function buildWrapMnt(
     unsigned_tx: {
       to: wmntAddress(network),
       data,
-      value: amountRaw.toString(),
+      value: "0x" + amountRaw.toString(16),
       chainId: chainId(network)
     },
     warnings: [],
@@ -368,7 +377,7 @@ export async function buildUnwrapMnt(
     unsigned_tx: {
       to: wmntAddress(network),
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [],
@@ -402,36 +411,84 @@ export async function buildSwap(
     typeof args.slippage_bps === "number" ? args.slippage_bps : 50; // default 0.5%
   const recipient = requireAddress(args.recipient, "recipient");
 
+  // Auto-resolve pair params from known pairs registry
+  const knownPair =
+    findPair(provider, tokenIn.symbol, tokenOut.symbol, network) ??
+    findPairByAddress(provider, tokenIn.address, tokenOut.address, network);
+
+  // Accept caller-provided amount_out_min (from a prior quote call)
+  const amountOutMin =
+    typeof args.amount_out_min === "string" && args.amount_out_min !== "0"
+      ? BigInt(args.amount_out_min)
+      : 0n;
+
   const amountInDecimal = formatUnits(amountInRaw, tokenIn.decimals);
   const deadline = d.deadline();
 
   if (provider === "agni" || provider === "fluxion") {
+    // Resolve fee_tier: caller > known pair > error
+    let feeTier: number;
+    if (typeof args.fee_tier === "number") {
+      feeTier = args.fee_tier;
+    } else if (knownPair && knownPair.provider !== "merchant_moe") {
+      feeTier = (knownPair as V3Pair).feeTier;
+    } else {
+      const available = listPairs(provider).map(
+        (p) => `${p.tokenA}/${p.tokenB}`
+      );
+      throw new MantleMcpError(
+        "UNKNOWN_PAIR",
+        `No known fee_tier for ${tokenIn.symbol}/${tokenOut.symbol} on ${provider}. Provide fee_tier explicitly.`,
+        `Known pairs on ${provider}: ${available.join(", ") || "none"}. Common fee tiers: 500 (0.05%), 3000 (0.3%), 10000 (1%).`,
+        { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
+      );
+    }
+
     return buildV3Swap({
       provider,
       tokenIn,
       tokenOut,
       amountInRaw,
       amountInDecimal,
+      amountOutMin,
       slippageBps,
       recipient,
       deadline,
       network,
-      feeTier: typeof args.fee_tier === "number" ? args.fee_tier : 3000,
+      feeTier,
       now: d.now()
     });
   }
 
-  // merchant_moe — use LB Router
+  // merchant_moe — resolve bin_step: caller > known pair > error
+  let binStep: number;
+  if (typeof args.bin_step === "number") {
+    binStep = args.bin_step;
+  } else if (knownPair && knownPair.provider === "merchant_moe") {
+    binStep = (knownPair as MoePair).binStep;
+  } else {
+    const available = listPairs("merchant_moe").map(
+      (p) => `${p.tokenA}/${p.tokenB}`
+    );
+    throw new MantleMcpError(
+      "UNKNOWN_PAIR",
+      `No known bin_step for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. Provide bin_step explicitly.`,
+      `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 5 (LSTs), 20 (volatile).`,
+      { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
+    );
+  }
+
   return buildMoeSwap({
     tokenIn,
     tokenOut,
     amountInRaw,
     amountInDecimal,
+    amountOutMin,
     slippageBps,
     recipient,
     deadline,
     network,
-    binStep: typeof args.bin_step === "number" ? args.bin_step : 20,
+    binStep,
     now: d.now()
   });
 }
@@ -442,6 +499,7 @@ function buildV3Swap(params: {
   tokenOut: ResolvedToken;
   amountInRaw: bigint;
   amountInDecimal: string;
+  amountOutMin: bigint;
   slippageBps: number;
   recipient: string;
   deadline: bigint;
@@ -455,6 +513,7 @@ function buildV3Swap(params: {
     tokenOut,
     amountInRaw,
     amountInDecimal,
+    amountOutMin,
     slippageBps,
     recipient,
     deadline,
@@ -465,14 +524,7 @@ function buildV3Swap(params: {
 
   const routerAddress = getContractAddress(provider, "swap_router", network);
 
-  // amountOutMinimum = 0 when we can't know the quote; the agent should have
-  // called mantle_getSwapQuote first and set a proper minimum. We still apply
-  // the slippage placeholder so the field is non-zero.
-  const amountOutMinStr =
-    typeof params.slippageBps === "number" ? "0" : "0";
-
-  // If caller provides amount_out_min, prefer it
-  const amountOutMin = 0n; // caller should override via quote
+  // Use amountOutMin from caller (ideally from a prior quote call)
 
   const data = encodeFunctionData({
     abi: V3_SWAP_ROUTER_ABI,
@@ -492,9 +544,11 @@ function buildV3Swap(params: {
   });
 
   const warnings: string[] = [];
-  warnings.push(
-    `amountOutMinimum is 0. Call mantle_getSwapQuote first and pass the quoted minimum to avoid sandwich attacks.`
-  );
+  if (amountOutMin === 0n) {
+    warnings.push(
+      `amountOutMinimum is 0. Call mantle_getSwapQuote first and pass amount_out_min to avoid sandwich attacks.`
+    );
+  }
 
   const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
   return {
@@ -503,7 +557,7 @@ function buildV3Swap(params: {
     unsigned_tx: {
       to: routerAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings,
@@ -516,6 +570,7 @@ function buildMoeSwap(params: {
   tokenOut: ResolvedToken;
   amountInRaw: bigint;
   amountInDecimal: string;
+  amountOutMin: bigint;
   slippageBps: number;
   recipient: string;
   deadline: bigint;
@@ -528,6 +583,7 @@ function buildMoeSwap(params: {
     tokenOut,
     amountInRaw,
     amountInDecimal,
+    amountOutMin,
     slippageBps,
     recipient,
     deadline,
@@ -555,7 +611,7 @@ function buildMoeSwap(params: {
   const data = encodeFunctionData({
     abi: LB_ROUTER_ABI,
     functionName: "swapExactTokensForTokens",
-    args: [amountInRaw, 0n, path, recipient as `0x${string}`, deadline]
+    args: [amountInRaw, amountOutMin, path, recipient as `0x${string}`, deadline]
   });
 
   const warnings: string[] = [];
@@ -569,7 +625,7 @@ function buildMoeSwap(params: {
     unsigned_tx: {
       to: routerAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings,
@@ -747,7 +803,7 @@ function buildV3AddLiquidity(params: {
     unsigned_tx: {
       to: positionManager,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings,
@@ -835,7 +891,7 @@ function buildMoeAddLiquidity(params: {
     unsigned_tx: {
       to: routerAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [],
@@ -925,7 +981,7 @@ export async function buildRemoveLiquidity(
     unsigned_tx: {
       to: routerAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1006,7 +1062,7 @@ function buildV3RemoveLiquidity(params: {
     unsigned_tx: {
       to: positionManager,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1060,7 +1116,7 @@ export async function buildAaveSupply(
     unsigned_tx: {
       to: poolAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1128,7 +1184,7 @@ export async function buildAaveBorrow(
     unsigned_tx: {
       to: poolAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1199,7 +1255,7 @@ export async function buildAaveRepay(
     unsigned_tx: {
       to: poolAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1259,7 +1315,7 @@ export async function buildAaveWithdraw(
     unsigned_tx: {
       to: poolAddress,
       data,
-      value: "0",
+      value: "0x0",
       chainId: chainId(network)
     },
     warnings: [
@@ -1274,6 +1330,49 @@ export async function buildAaveWithdraw(
     },
     built_at_utc: d.now()
   };
+}
+
+// =========================================================================
+// Tool 11: mantle_getSwapPairs (read-only — returns known pair configs)
+// =========================================================================
+
+export async function getSwapPairs(
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const providerRaw = typeof args.provider === "string" ? args.provider.toLowerCase().trim() : null;
+  const validProviders = ["agni", "fluxion", "merchant_moe"] as const;
+
+  if (providerRaw && validProviders.includes(providerRaw as typeof validProviders[number])) {
+    const pairs = listPairs(providerRaw as typeof validProviders[number]);
+    return {
+      provider: providerRaw,
+      pairs: pairs.map((p) => ({
+        tokenA: p.tokenA,
+        tokenB: p.tokenB,
+        pool: p.pool,
+        ...(p.provider === "merchant_moe"
+          ? { bin_step: (p as MoePair).binStep, version: (p as MoePair).version }
+          : { fee_tier: (p as V3Pair).feeTier })
+      })),
+      count: pairs.length
+    };
+  }
+
+  // Return all pairs grouped by provider
+  const all = listAllPairs();
+  const grouped: Record<string, unknown[]> = {};
+  for (const p of all) {
+    if (!grouped[p.provider]) grouped[p.provider] = [];
+    grouped[p.provider].push({
+      tokenA: p.tokenA,
+      tokenB: p.tokenB,
+      pool: p.pool,
+      ...(p.provider === "merchant_moe"
+        ? { bin_step: (p as MoePair).binStep }
+        : { fee_tier: (p as V3Pair).feeTier })
+    });
+  }
+  return { pairs_by_provider: grouped, total: all.length };
 }
 
 // =========================================================================
@@ -1357,7 +1456,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX (agni, fluxion, or merchant_moe). Returns calldata. Call mantle_getSwapQuote first to get price and set amountOutMinimum.\n\nExamples:\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...'\n- Swap 5 USDC for USDe on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDe', amount_in='5', recipient='0x...'",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-resolved from known pairs; override only if needed.\n\nWORKFLOW:\n1. Call mantle_getSwapPairs({ provider }) to see available pairs and their params\n2. Call mantle_getSwapQuote to get expected output amount\n3. Call mantle_buildApprove for token_in → router (if allowance insufficient)\n4. Call mantle_buildSwap with amount_out_min from the quote\n5. Sign and broadcast each unsigned_tx (value field is hex-encoded)\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...' (bin_step auto-resolved to 1)\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...' (fee_tier auto-resolved to 10000)",
     inputSchema: {
       type: "object",
       properties: {
@@ -1381,6 +1480,10 @@ export const defiWriteTools: Record<string, Tool> = {
           type: "string",
           description: "Address to receive output tokens."
         },
+        amount_out_min: {
+          type: "string",
+          description: "Minimum output in raw units (from mantle_getSwapQuote). Use '0' if unknown but NOT recommended."
+        },
         slippage_bps: {
           type: "number",
           description: "Slippage tolerance in basis points (default: 50 = 0.5%)."
@@ -1388,12 +1491,12 @@ export const defiWriteTools: Record<string, Tool> = {
         fee_tier: {
           type: "number",
           description:
-            "V3 fee tier in hundredths of bps (e.g. 3000 = 0.3%). For agni/fluxion only."
+            "V3 fee tier (500=0.05%, 3000=0.3%, 10000=1%). Auto-resolved from known pairs for agni/fluxion."
         },
         bin_step: {
           type: "number",
           description:
-            "LB bin step (e.g. 20). For merchant_moe only."
+            "LB bin step (1=stablecoins, 5=LSTs, 20=volatile). Auto-resolved from known pairs for merchant_moe."
         },
         network: {
           type: "string",
@@ -1668,5 +1771,23 @@ export const defiWriteTools: Record<string, Tool> = {
       required: ["asset", "amount", "to"]
     },
     handler: buildAaveWithdraw
+  },
+
+  mantle_getSwapPairs: {
+    name: "mantle_getSwapPairs",
+    description:
+      "List known trading pairs and their pool parameters for a DEX. Returns bin_step (Merchant Moe) or fee_tier (Agni/Fluxion) for each pair. Call this BEFORE mantle_buildSwap to get the correct pool parameters.\n\nExamples:\n- All Merchant Moe pairs: provider='merchant_moe'\n- All Agni pairs: provider='agni'\n- All pairs across all DEXes: (no provider)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          description:
+            "Filter by DEX: 'agni', 'fluxion', or 'merchant_moe'. Omit for all DEXes."
+        }
+      },
+      required: []
+    },
+    handler: getSwapPairs
   }
 };
