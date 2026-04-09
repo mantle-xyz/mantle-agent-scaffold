@@ -13,7 +13,7 @@ interface SwapQuoteDeps {
     network?: "mainnet" | "sepolia"
   ) => Promise<ResolvedTokenInput> | ResolvedTokenInput;
   quoteProvider: (params: {
-    provider: "agni" | "merchant_moe";
+    provider: "agni" | "merchant_moe" | "fluxion";
     tokenIn: ResolvedTokenInput;
     tokenOut: ResolvedTokenInput;
     amountInRaw: bigint;
@@ -52,7 +52,7 @@ interface TokenPriceLookup {
 interface PoolLiquidityDeps {
   readPool: (params: {
     poolAddress: string;
-    provider: "agni" | "merchant_moe";
+    provider: "agni" | "merchant_moe" | "fluxion";
     network: "mainnet" | "sepolia";
   }) => Promise<{
     token_0: { address: string; symbol: string | null; decimals: number | null };
@@ -64,7 +64,7 @@ interface PoolLiquidityDeps {
   } | null>;
   readPoolFromSubgraph: (params: {
     poolAddress: string;
-    provider: "agni" | "merchant_moe";
+    provider: "agni" | "merchant_moe" | "fluxion";
     network: "mainnet" | "sepolia";
   }) => Promise<{
     token_0: { address: string; symbol: string | null; decimals: number | null };
@@ -76,7 +76,7 @@ interface PoolLiquidityDeps {
   } | null>;
   readPoolFromIndexer: (params: {
     poolAddress: string;
-    provider: "agni" | "merchant_moe";
+    provider: "agni" | "merchant_moe" | "fluxion";
     network: "mainnet" | "sepolia";
   }) => Promise<{
     token_0: { address: string; symbol: string | null; decimals: number | null };
@@ -121,7 +121,7 @@ interface LendingMarketsDeps {
   now: () => string;
 }
 
-type ProtocolTvlKey = "agni" | "merchant_moe";
+type ProtocolTvlKey = "agni" | "merchant_moe" | "fluxion";
 
 type ProtocolTvlValue =
   | {
@@ -190,7 +190,8 @@ const PRICE_SCALE = 10n ** BigInt(PRICE_SCALE_DECIMALS);
 
 const PROTOCOL_TVL_SLUGS: Record<ProtocolTvlKey, string> = {
   agni: "agni-finance",
-  merchant_moe: "merchant-moe"
+  merchant_moe: "merchant-moe",
+  fluxion: "fluxion"
 };
 
 function resolveDexScreenerChain(network: "mainnet" | "sepolia"): string | null {
@@ -207,17 +208,21 @@ function resolveDefiLlamaChain(network: "mainnet" | "sepolia"): string | null {
   return null;
 }
 
-function providerToDexId(provider: "agni" | "merchant_moe"): string {
+function providerToDexId(provider: "agni" | "merchant_moe" | "fluxion"): string {
+  if (provider === "fluxion") return "0xf883162ed9c7e8ef604214c964c678e40c9b737c";
   return provider === "agni" ? "agni" : "merchantmoe";
 }
 
-function dexIdToProvider(dexId: string | undefined): "agni" | "merchant_moe" | null {
+function dexIdToProvider(dexId: string | undefined): "agni" | "merchant_moe" | "fluxion" | null {
   const normalized = (dexId ?? "").toLowerCase();
   if (normalized === "agni") {
     return "agni";
   }
   if (normalized === "merchantmoe") {
     return "merchant_moe";
+  }
+  if (normalized === "0xf883162ed9c7e8ef604214c964c678e40c9b737c") {
+    return "fluxion";
   }
   return null;
 }
@@ -509,7 +514,7 @@ async function fetchDexScreenerPairByAddress(
 
 function pickBestDexPairForRoute(
   pairs: DexScreenerPair[],
-  provider: "agni" | "merchant_moe",
+  provider: "agni" | "merchant_moe" | "fluxion",
   tokenInAddress: string,
   tokenOutAddress: string
 ): DexScreenerPair | null {
@@ -1072,7 +1077,7 @@ function withProtocolTvlDeps(overrides?: Partial<ProtocolTvlDeps>): ProtocolTvlD
 }
 
 function resolveRouterAddress(
-  provider: "agni" | "merchant_moe",
+  provider: "agni" | "merchant_moe" | "fluxion",
   network: "mainnet" | "sepolia"
 ): string {
   const entry = MANTLE_PROTOCOLS[network][provider];
@@ -1086,9 +1091,9 @@ function resolveRouterAddress(
   }
 
   const router =
-    provider === "agni"
-      ? entry.contracts.swap_router
-      : entry.contracts.lb_router_v2_2;
+    provider === "merchant_moe"
+      ? entry.contracts.lb_router_v2_2
+      : entry.contracts.swap_router; // agni and fluxion both use swap_router
 
   if (!router || !isAddress(router, { strict: false })) {
     throw new MantleMcpError(
@@ -1137,14 +1142,14 @@ export async function getSwapQuote(
     );
   }
 
-  let providerSelection: "agni" | "merchant_moe" | "best";
-  if (providerInput === "agni" || providerInput === "merchant_moe" || providerInput === "best") {
+  let providerSelection: "agni" | "merchant_moe" | "fluxion" | "best";
+  if (providerInput === "agni" || providerInput === "merchant_moe" || providerInput === "fluxion" || providerInput === "best") {
     providerSelection = providerInput;
   } else {
     throw new MantleMcpError(
       "INVALID_INPUT",
       `Unsupported provider: ${providerInput}`,
-      "Use provider=agni, provider=merchant_moe, or provider=best.",
+      "Use provider=agni, provider=fluxion, provider=merchant_moe, or provider=best.",
       { provider: providerInput }
     );
   }
@@ -1196,7 +1201,7 @@ export async function getSwapQuote(
 
   const warnings: string[] = [];
   const sourceTrace: SourceTraceEntry[] = [];
-  let selectedProvider: "agni" | "merchant_moe";
+  let selectedProvider: "agni" | "merchant_moe" | "fluxion";
   let quote: SwapProviderQuote | null = null;
   let successfulSources = 0;
   let tierUsed = 1;
@@ -1204,7 +1209,7 @@ export async function getSwapQuote(
   let selectedOutRaw: bigint | null = null;
 
   if (providerSelection === "best") {
-    const [agniResult, merchantMoeResult] = await Promise.allSettled([
+    const [agniResult, merchantMoeResult, fluxionResult] = await Promise.allSettled([
       resolvedDeps.quoteProvider({
         provider: "agni",
         tokenIn,
@@ -1220,75 +1225,58 @@ export async function getSwapQuote(
         amountInRaw,
         network,
         feeTier
+      }),
+      resolvedDeps.quoteProvider({
+        provider: "fluxion",
+        tokenIn,
+        tokenOut,
+        amountInRaw,
+        network,
+        feeTier
       })
     ]);
 
     const candidates: Array<{
-      provider: "agni" | "merchant_moe";
+      provider: "agni" | "merchant_moe" | "fluxion";
       quote: SwapProviderQuote;
       outRaw: bigint;
     }> = [];
 
-    if (agniResult.status === "fulfilled" && agniResult.value) {
-      sourceTrace.push({
-        source: "dexscreener:agni",
-        tier: 1,
-        status: "success"
-      });
-      candidates.push({
-        provider: "agni",
-        quote: agniResult.value,
-        outRaw: parseRawAmount(agniResult.value.estimated_out_raw, "estimated_out_raw", {
-          provider: "agni",
-          token_in: tokenIn.address,
-          token_out: tokenOut.address
-        })
-      });
-    } else if (agniResult.status === "fulfilled") {
-      sourceTrace.push({
-        source: "dexscreener:agni",
-        tier: 1,
-        status: "empty",
-        reason: "no route"
-      });
-    } else {
-      sourceTrace.push({
-        source: "dexscreener:agni",
-        tier: 1,
-        status: "error",
-        reason: agniResult.reason instanceof Error ? agniResult.reason.message : "quote provider failed"
-      });
-    }
-
-    if (merchantMoeResult.status === "fulfilled" && merchantMoeResult.value) {
-      sourceTrace.push({
-        source: "dexscreener:merchant_moe",
-        tier: 1,
-        status: "success"
-      });
-      candidates.push({
-        provider: "merchant_moe",
-        quote: merchantMoeResult.value,
-        outRaw: parseRawAmount(merchantMoeResult.value.estimated_out_raw, "estimated_out_raw", {
-          provider: "merchant_moe",
-          token_in: tokenIn.address,
-          token_out: tokenOut.address
-        })
-      });
-    } else if (merchantMoeResult.status === "fulfilled") {
-      sourceTrace.push({
-        source: "dexscreener:merchant_moe",
-        tier: 1,
-        status: "empty",
-        reason: "no route"
-      });
-    } else {
-      sourceTrace.push({
-        source: "dexscreener:merchant_moe",
-        tier: 1,
-        status: "error",
-        reason: merchantMoeResult.reason instanceof Error ? merchantMoeResult.reason.message : "quote provider failed"
-      });
+    for (const [label, result] of [
+      ["agni", agniResult],
+      ["merchant_moe", merchantMoeResult],
+      ["fluxion", fluxionResult]
+    ] as const) {
+      if (result.status === "fulfilled" && result.value) {
+        sourceTrace.push({
+          source: `dexscreener:${label}`,
+          tier: 1,
+          status: "success"
+        });
+        candidates.push({
+          provider: label,
+          quote: result.value,
+          outRaw: parseRawAmount(result.value.estimated_out_raw, "estimated_out_raw", {
+            provider: label,
+            token_in: tokenIn.address,
+            token_out: tokenOut.address
+          })
+        });
+      } else if (result.status === "fulfilled") {
+        sourceTrace.push({
+          source: `dexscreener:${label}`,
+          tier: 1,
+          status: "empty",
+          reason: "no route"
+        });
+      } else {
+        sourceTrace.push({
+          source: `dexscreener:${label}`,
+          tier: 1,
+          status: "error",
+          reason: result.reason instanceof Error ? result.reason.message : "quote provider failed"
+        });
+      }
     }
 
     if (candidates.length === 0) {
@@ -1450,8 +1438,8 @@ export async function getPoolOpportunities(
     );
   }
 
-  const providerSelection: "agni" | "merchant_moe" | "all" =
-    providerInput === "agni" || providerInput === "merchant_moe" || providerInput === "all"
+  const providerSelection: "agni" | "merchant_moe" | "fluxion" | "all" =
+    providerInput === "agni" || providerInput === "merchant_moe" || providerInput === "fluxion" || providerInput === "all"
       ? providerInput
       : "all";
 
@@ -1507,7 +1495,7 @@ export async function getPoolOpportunities(
       );
     })
     .map((pair) => {
-      const provider = dexIdToProvider(pair.dexId) as "agni" | "merchant_moe";
+      const provider = dexIdToProvider(pair.dexId) as "agni" | "merchant_moe" | "fluxion";
       const poolAddress =
         pair.pairAddress && isAddress(pair.pairAddress, { strict: false })
           ? getAddress(pair.pairAddress)
@@ -1618,8 +1606,8 @@ export async function getPoolLiquidity(
   const { network } = normalizeNetwork(args);
   const poolAddressInput = typeof args.pool_address === "string" ? args.pool_address : "";
   const providerInput = typeof args.provider === "string" ? args.provider : "agni";
-  const provider: "agni" | "merchant_moe" =
-    providerInput === "merchant_moe" ? "merchant_moe" : "agni";
+  const provider: "agni" | "merchant_moe" | "fluxion" =
+    providerInput === "merchant_moe" ? "merchant_moe" : providerInput === "fluxion" ? "fluxion" : "agni";
 
   if (!poolAddressInput || !isAddress(poolAddressInput, { strict: false })) {
     throw new MantleMcpError(
@@ -2192,7 +2180,7 @@ export const defiReadTools: Record<string, Tool> = {
         amount_in: { type: "string", description: "Human-readable amount in." },
         provider: {
           type: "string",
-          enum: ["agni", "merchant_moe", "best"],
+          enum: ["agni", "fluxion", "merchant_moe", "best"],
           description: "Routing provider"
         },
         fee_tier: { type: "number", description: "Optional V3 fee tier." },
