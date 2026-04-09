@@ -28,6 +28,13 @@ export interface MoePair {
   binStep: number;
   /** Liquidity Book version. */
   version: number;
+  /**
+   * LB Router path version enum. This is the value passed in the `versions[]`
+   * array when calling `swapExactTokensForTokens`.
+   *   0 = V1 (classic AMM), 1 = V2, 2 = V2.1, 3 = V2.2
+   * Defaults to 0 (V1) if omitted — V1 routing works for all Moe pools.
+   */
+  routerVersion?: number;
 }
 
 export interface V3Pair {
@@ -66,30 +73,30 @@ export const TOKENS = {
 // ---------------------------------------------------------------------------
 
 const MOE_PAIRS: MoePair[] = [
-  // ---- Stablecoin pairs (bin_step = 1) ----
+  // ---- Stablecoin pairs (bin_step = 1, LB V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "USDC", tokenB: "USDT0",
     tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDT0,
     pool: "0x48c1a89af1102cad358549e9bb16ae5f96cddfec",
-    binStep: 1, version: 2
+    binStep: 1, version: 2, routerVersion: 3
   },
   {
     provider: "merchant_moe",
     tokenA: "USDe", tokenB: "USDT0",
     tokenAAddress: TOKENS.USDe, tokenBAddress: TOKENS.USDT0,
     pool: "0x7ccd8a769d466340fff36c6e10ffa8cf9077d988",
-    binStep: 1, version: 2
+    binStep: 1, version: 2, routerVersion: 3
   },
   {
     provider: "merchant_moe",
     tokenA: "USDC", tokenB: "USDe",
     tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDe,
     pool: "0xd55639c3312467adafb347614806f1d30525c0c8",
-    binStep: 1, version: 2
+    binStep: 1, version: 2, routerVersion: 3
   },
 
-  // ---- WMNT pairs (bin_step = 15-25) ----
+  // ---- WMNT pairs (V1 classic AMM pools — routerVersion defaults to 0) ----
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDT0",
@@ -112,7 +119,7 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 20, version: 2
   },
 
-  // ---- ETH derivative pairs ----
+  // ---- ETH derivative pairs (V1 classic AMM pools) ----
   {
     provider: "merchant_moe",
     tokenA: "mETH", tokenB: "WETH",

@@ -507,6 +507,7 @@ export async function buildSwap(
 
   // merchant_moe — resolve bin_step: caller > known pair > error
   let binStep: number;
+  let routerVersion: number = 0; // default V1 — works for all Moe pools
   if (typeof args.bin_step === "number") {
     binStep = args.bin_step;
   } else if (knownPair && knownPair.provider === "merchant_moe") {
@@ -523,6 +524,13 @@ export async function buildSwap(
     );
   }
 
+  // Resolve router version: caller > known pair > default (0 = V1)
+  if (typeof args.router_version === "number") {
+    routerVersion = args.router_version;
+  } else if (knownPair && knownPair.provider === "merchant_moe") {
+    routerVersion = (knownPair as MoePair).routerVersion ?? 0;
+  }
+
   return buildMoeSwap({
     tokenIn,
     tokenOut,
@@ -534,6 +542,7 @@ export async function buildSwap(
     deadline,
     network,
     binStep,
+    routerVersion,
     now: d.now()
   });
 }
@@ -626,6 +635,7 @@ function buildMoeSwap(params: {
   deadline: bigint;
   network: Network;
   binStep: number;
+  routerVersion: number;
   now: string;
 }): UnsignedTxResult {
   const {
@@ -639,6 +649,7 @@ function buildMoeSwap(params: {
     deadline,
     network,
     binStep,
+    routerVersion,
     now
   } = params;
 
@@ -649,9 +660,10 @@ function buildMoeSwap(params: {
   );
 
   // LB Router path structure
+  // routerVersion enum: 0=V1 (classic AMM), 1=V2, 2=V2.1, 3=V2.2
   const path = {
     pairBinSteps: [BigInt(binStep)],
-    versions: [2], // V2.2
+    versions: [routerVersion],
     tokenPath: [
       tokenIn.address as `0x${string}`,
       tokenOut.address as `0x${string}`
