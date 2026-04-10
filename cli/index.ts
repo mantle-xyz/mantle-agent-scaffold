@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { MantleMcpError } from "../src/errors.js";
 import { disableColors, formatError, formatJson } from "./formatter.js";
@@ -16,12 +17,16 @@ import { registerIndexer } from "./commands/indexer.js";
 import { registerDiagnostics } from "./commands/diagnostics.js";
 import { registerCatalog } from "./commands/catalog.js";
 
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+);
+
 const program = new Command();
 
 program
   .name("mantle-cli")
   .description("CLI for Mantle L2 chain reads, DeFi queries, swaps, LP, and Aave operations")
-  .version("0.1.0")
+  .version(pkg.version)
   .option("-n, --network <network>", "target network (mainnet, sepolia)", "mainnet")
   .option("--json", "output raw JSON", false)
   .option("--no-color", "disable colored output")

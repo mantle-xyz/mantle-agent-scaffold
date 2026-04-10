@@ -1,6 +1,6 @@
 {
   "name": "mantle-mcp",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
   "type": "module",
