@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readSkillsReference } from "../src/lib/skills-path.js";
+import { readSkillsReference, isSkillsCheckoutAvailable } from "@0xwh1sker/mantle-mcp/lib/skills-path.js";
 
 describe("readSkillsReference", () => {
   it("tells the operator how to initialize the skills checkout when it is missing", () => {
@@ -37,6 +37,27 @@ describe("readSkillsReference", () => {
       expect(
         readSkillsReference("skills/mantle-network-primer/references/mantle-network-basics.md", tempDir)
       ).toContain("Mantle Network Basics");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("isSkillsCheckoutAvailable", () => {
+  it("returns false when skills/ does not exist", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "no-skills-"));
+    try {
+      expect(isSkillsCheckoutAvailable(tempDir)).toBe(false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns true when skills/ exists", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "has-skills-"));
+    try {
+      mkdirSync(path.join(tempDir, "skills"));
+      expect(isSkillsCheckoutAvailable(tempDir)).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

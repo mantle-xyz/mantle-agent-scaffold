@@ -1,48 +1,25 @@
 {
-  "name": "mantle-mcp",
-  "version": "0.1.3",
+  "name": "mantle-agent-scaffold",
+  "private": true,
+  "version": "0.1.4",
   "license": "MIT",
-  "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
+  "description": "Monorepo for Mantle L2 tooling — core library, CLI, and MCP server",
   "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "mantle-mcp": "dist/index.js",
-    "mantle-cli": "dist/cli/index.js"
-  },
-  "files": [
-    "dist",
-    "LICENSE",
-    "SERVER_INSTRUCTIONS.md",
-    "README.md",
-    "src/README.md",
-    "cli/README.md"
+  "workspaces": [
+    "packages/*"
   ],
-  "mcp": {
-    "serverUseInstructions": "Mantle L2 chain tools. Gas token is MNT, not ETH. CRITICAL RULES: (1) NEVER hold or request private keys - all transaction tools return unsigned payloads only. (2) ALWAYS call mantle_resolveAddress or mantle_resolveToken to verify addresses before using them in transaction-building tools; for token symbols, mantle_resolveToken must double-check against https://token-list.mantle.xyz. (3) ALWAYS ensure a fresh simulation result before presenting a transaction for signing (for mantle_build*Tx, use the returned simulation field; use mantle_simulateTx for custom calldata or re-simulation). (4) ALWAYS present the human_summary field to the user and obtain explicit confirmation before any signing step. (5) Gas estimates and native balances are in MNT. (6) When an address cannot be resolved through the registry, STOP and ask the user rather than proceeding with an unverified address."
-  },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
+    "build": "npm run build -w packages/core && npm run build -w packages/cli -w packages/mcp",
+    "typecheck": "npm run typecheck -w packages/core && npm run typecheck -w packages/cli -w packages/mcp",
+    "pretest": "npm run build",
+    "test": "npx vitest run",
+    "test:e2e": "npx vitest run --config vitest.e2e.config.ts",
+    "test:e2e:required": "E2E_REQUIRE_LIVE=true npx vitest run --config vitest.e2e.config.ts",
     "skills:init": "git submodule update --init --recursive skills",
     "skills:sync": "git submodule update --init --remote skills && git add skills",
-    "pretest": "npm run build",
-    "test": "vitest run",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:e2e:required": "E2E_REQUIRE_LIVE=true vitest run --config vitest.e2e.config.ts",
+    "start": "npm start -w packages/mcp",
     "docs:dev": "npm --prefix docs run dev",
-    "docs:build": "HOME=$PWD/docs npm --prefix docs run build",
-    "prepare": "[ -x node_modules/.bin/tsc ] && tsc || echo 'tsc not found, using pre-built dist/'",
-    "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "chalk": "^5.6.2",
-    "commander": "^14.0.3",
-    "viem": "^2.39.0"
-  },
-  "optionalDependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "docs:build": "HOME=$PWD/docs npm --prefix docs run build"
   },
   "devDependencies": {
     "@ai-sdk/anthropic": "^3.0.50",

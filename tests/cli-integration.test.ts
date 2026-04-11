@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const CLI_PATH = resolve(import.meta.dirname, "../dist/cli/index.js");
+const CLI_PATH = resolve(import.meta.dirname, "../packages/cli/dist/index.js");
+const CLI_VERSION = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "../packages/cli/package.json"), "utf8")
+).version;
 
 function run(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return execFileAsync("node", [CLI_PATH, ...args], { timeout: 10000 })
@@ -55,7 +59,7 @@ describe("CLI integration", () => {
   it("shows version with --version", async () => {
     const { stdout, exitCode } = await run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.1.0");
+    expect(stdout.trim()).toBe(CLI_VERSION);
   });
 
   it("chain info returns static config as JSON", async () => {

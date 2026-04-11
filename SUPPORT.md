@@ -3,8 +3,9 @@
 Use the repository docs first:
 
 - root `README.md` for repository entry points
-- `src/README.md` for MCP server overview
-- `cli/README.md` for CLI usage
+- `packages/core/README.md` for core library overview
+- `packages/cli/README.md` for CLI usage
+- `packages/mcp/README.md` for MCP server setup
 - `docs/` site for architecture and integration details
 
 ## Where to Ask

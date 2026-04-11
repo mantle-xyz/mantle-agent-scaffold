@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allTools } from "../src/tools/index.js";
+import { allTools } from "@0xwh1sker/mantle-core/tools/index.js";
 
 describe("server wiring", () => {
   it("registers all v0.2 tools", () => {
@@ -19,11 +19,13 @@ describe("server wiring", () => {
       "mantle_buildWrapMnt",
       "mantle_checkRpcHealth",
       "mantle_findPools",
+      "mantle_getAavePositions",
       "mantle_getAllowances",
       "mantle_getBalance",
       "mantle_getChainInfo",
       "mantle_getChainStatus",
       "mantle_getLBPairState",
+      "mantle_getLBPositions",
       "mantle_getLendingMarkets",
       "mantle_getPoolLiquidity",
       "mantle_getPoolOpportunities",

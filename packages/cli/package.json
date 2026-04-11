@@ -1,0 +1,43 @@
+{
+  "name": "@0xwh1sker/mantle-cli",
+  "version": "0.1.4",
+  "license": "MIT",
+  "description": "CLI for Mantle L2 chain reads, DeFi queries, swaps, LP, and Aave operations",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "bin": {
+    "mantle-cli": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@0xwh1sker/mantle-core": "0.1.4",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

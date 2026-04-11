@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { formatKeyValue, formatJson, formatTable, formatError } from "../cli/formatter.js";
+import { formatKeyValue, formatJson, formatTable, formatError } from "@0xwh1sker/mantle-cli/formatter.js";
 
 describe("formatJson", () => {
   it("outputs pretty-printed JSON to stdout", () => {

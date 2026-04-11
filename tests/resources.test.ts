@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listResources, readResource } from "../src/resources.js";
+import { listResources, readResource } from "@0xwh1sker/mantle-mcp/resources.js";
 
 describe("resources", () => {
   it("lists required v0.2 resources", () => {

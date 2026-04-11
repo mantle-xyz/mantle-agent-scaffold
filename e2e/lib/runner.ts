@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { generateText, stepCountIs, type ToolSet } from "ai";
-import { createServer } from "../../src/server.js";
+import { createServer } from "@0xwh1sker/mantle-mcp/server.js";
 import {
   hasRequiredLlmConfig,
   resolveE2EConfig,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MantleMcpError } from "../src/errors.js";
-import { getChainInfo, getChainStatus } from "../src/tools/chain.js";
+import { MantleMcpError } from "@0xwh1sker/mantle-core/errors.js";
+import { getChainInfo, getChainStatus } from "@0xwh1sker/mantle-core/tools/chain.js";
 
 describe("chain tools", () => {
   it("returns mainnet chain info by default", async () => {

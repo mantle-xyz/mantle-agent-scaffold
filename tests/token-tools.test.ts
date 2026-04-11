@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MantleMcpError } from "../src/errors.js";
-import { getTokenInfo, getTokenPrices, resolveToken } from "../src/tools/token.js";
+import { MantleMcpError } from "@0xwh1sker/mantle-core/errors.js";
+import { getTokenInfo, getTokenPrices, resolveToken } from "@0xwh1sker/mantle-core/tools/token.js";
 
 describe("token tools", () => {
   afterEach(() => {

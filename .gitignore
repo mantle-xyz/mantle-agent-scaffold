@@ -1,4 +1,6 @@
 node_modules
+dist
+packages/*/dist
 .worktrees/
 .env
 .env.*

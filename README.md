@@ -14,16 +14,13 @@ Add to your `.mcp.json` or Claude Code `settings.json`:
     "mantle": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "github:mantle-xyz/mantle-agent-scaffold"],
-      "env": {
-        "MANTLE_MCP_TRANSPORT": "stdio"
-      }
+      "args": ["-y", "@0xwh1sker/mantle-mcp"]
     }
   }
 }
 ```
 
-Restart your agent after adding the config. `npx` will fetch the repo, install dependencies, build automatically, and start the MCP server over stdio.
+Restart your agent after adding the config. `npx` will fetch the package from npm and start the MCP server over stdio.
 
 ## Available Tools
 
@@ -162,23 +159,32 @@ Skill definitions live under `skills/skills/<skill-name>/SKILL.md`. Relevant ski
 npm install
 npm run skills:init
 npm run build
-MANTLE_MCP_TRANSPORT=stdio npm start
+npm start -w packages/mcp
 ```
 
 Verify:
 
 ```bash
-npm run typecheck
 npm test
 ```
 
 ## CLI
 
 ```bash
-node dist/cli/index.js chain info
-node dist/cli/index.js registry resolve USDC --json
-node dist/cli/index.js token prices --tokens USDC,WETH --json
+npx @0xwh1sker/mantle-cli chain info
+npx @0xwh1sker/mantle-cli registry resolve USDC --json
+npx @0xwh1sker/mantle-cli token prices --tokens USDC,WETH --json
 ```
+
+## Packages
+
+This monorepo produces three independently publishable packages:
+
+| Package | Description |
+|---------|-------------|
+| [`@0xwh1sker/mantle-core`](packages/core/README.md) | Shared business logic — tools, config, and chain interaction |
+| [`@0xwh1sker/mantle-cli`](packages/cli/README.md) | CLI for chain reads, DeFi queries, and transaction building |
+| [`@0xwh1sker/mantle-mcp`](packages/mcp/README.md) | MCP server for AI agents |
 
 ## Documentation
 
@@ -186,5 +192,3 @@ node dist/cli/index.js token prices --tokens USDC,WETH --json
 - [External Agent Integration](https://mantle-xyz.github.io/mantle-agent-scaffold/concepts/external-agents/)
 - [Skills and MCP Usage](https://mantle-xyz.github.io/mantle-agent-scaffold/concepts/skills/)
 - [Architecture Model](https://mantle-xyz.github.io/mantle-agent-scaffold/concepts/architecture/)
-- [Server implementation overview](src/README.md)
-- [CLI overview](cli/README.md)

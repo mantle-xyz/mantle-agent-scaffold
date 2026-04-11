@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPromptMessages, prompts } from "../src/prompts.js";
+import { getPromptMessages, prompts } from "@0xwh1sker/mantle-mcp/prompts.js";
 
 describe("v0.2 prompts", () => {
   it("registers mantle_portfolioAudit, mantle_mantleBasics, and mantle_gasConfiguration", () => {

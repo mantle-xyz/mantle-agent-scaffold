@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkRpcHealth, probeEndpoint } from "../src/tools/diagnostics.js";
+import { checkRpcHealth, probeEndpoint } from "@0xwh1sker/mantle-core/tools/diagnostics.js";
 
 describe("diagnostics tools", () => {
   it("reports RPC health with matching chain id", async () => {

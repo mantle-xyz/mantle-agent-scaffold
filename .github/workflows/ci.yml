@@ -32,8 +32,8 @@ jobs:
       - name: Install docs dependencies
         run: npm --prefix docs ci
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Build packages
+        run: npm run build
 
       - name: Test
         run: npm test

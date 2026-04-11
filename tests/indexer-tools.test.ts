@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { queryIndexerSql, querySubgraph } from "../src/tools/indexer.js";
+import { queryIndexerSql, querySubgraph } from "@0xwh1sker/mantle-core/tools/indexer.js";
 
 describe("indexer tools", () => {
   it("blocks unsafe endpoints", async () => {

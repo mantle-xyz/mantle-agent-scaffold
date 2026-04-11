@@ -1,0 +1,38 @@
+{
+  "name": "@0xwh1sker/mantle-core",
+  "version": "0.1.4",
+  "license": "MIT",
+  "description": "Core business logic for Mantle L2 — chain reads, DeFi queries, and unsigned transaction building",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "viem": "^2.39.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,13 +1,6 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
     "outDir": "dist",
     "rootDir": ".",
     "types": [
@@ -16,10 +9,13 @@
     ]
   },
   "include": [
-    "cli/**/*.ts",
-    "src/**/*.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts",
     "vitest.e2e.config.ts"
+  ],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/cli" },
+    { "path": "packages/mcp" }
   ]
 }

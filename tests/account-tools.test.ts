@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAllowances, getBalance, getTokenBalances } from "../src/tools/account.js";
+import { getAllowances, getBalance, getTokenBalances } from "@0xwh1sker/mantle-core/tools/account.js";
 
 describe("account tools", () => {
   it("returns native MNT balance", async () => {

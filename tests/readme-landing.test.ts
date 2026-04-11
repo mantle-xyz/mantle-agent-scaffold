@@ -22,13 +22,14 @@ describe("readme landing page", () => {
     expect(readme).not.toContain("## E2E Agent Test");
   });
 
-  it("points readers to the docs site for detailed guidance", () => {
+  it("points readers to the docs site and package READMEs for detailed guidance", () => {
     const readme = readFileSync("README.md", "utf8");
 
     expect(readme).toContain("/concepts/external-agents");
     expect(readme).toContain("/concepts/skills");
     expect(readme).toContain("https://mantle-xyz.github.io/mantle-agent-scaffold/");
-    expect(readme).toContain("src/README.md");
-    expect(readme).toContain("cli/README.md");
+    expect(readme).toContain("packages/core/README.md");
+    expect(readme).toContain("packages/cli/README.md");
+    expect(readme).toContain("packages/mcp/README.md");
   });
 });
