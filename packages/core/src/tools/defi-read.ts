@@ -780,6 +780,7 @@ const MOE_BRIDGE_TOKEN_ADDRESSES: Record<string, string> = {
   WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
   USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
   USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
   USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
   WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
 };
@@ -2562,7 +2563,7 @@ export const defiReadTools: Record<string, Tool> = {
   getPoolLiquidity: {
     name: "mantle_getPoolLiquidity",
     description:
-      "Read pool reserves and liquidity metadata. Examples: inspect a Mantle DEX pool for USDC 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9 / USDT 0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE liquidity.",
+      "Read pool reserves and liquidity metadata. Examples: inspect a Mantle DEX pool for USDC 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9 / USDT0 0x779Ded0c9e1022225f8E0630b35a9b54bE713736 liquidity.",
     inputSchema: {
       type: "object",
       properties: {

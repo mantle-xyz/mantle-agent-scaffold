@@ -95,11 +95,14 @@ Mantle is an Ethereum L2 built with OP Stack and data availability optimizations
 | Finality | L1 confirmation dependent |
 
 ## Core Tokens
-| Token | Address (mainnet) |
-|-------|-------------------|
-| WMNT | 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8 |
-| USDC | 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9 |
-| USDT | 0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE |
+| Token | Address (mainnet) | Notes |
+|-------|-------------------|-------|
+| WMNT | 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8 | Wrapped MNT |
+| USDC | 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9 | |
+| USDT | 0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE | Bridged Tether — active on DEXes |
+| USDT0 | 0x779Ded0c9e1022225f8E0630b35a9b54bE713736 | LayerZero OFT Tether — active on DEXes AND Aave V3 |
+
+> **USDT vs USDT0**: Mantle has two official USDT variants. Both have deep DEX liquidity. Only USDT0 is supported on Aave V3. A USDT/USDT0 pool exists on Merchant Moe (bin_step=1) for direct conversion.
 
 ## DeFi Landscape
 | Protocol | Category | Status |

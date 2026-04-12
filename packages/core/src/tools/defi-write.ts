@@ -120,7 +120,7 @@ const MAX_UINT256 = 2n ** 256n - 1n;
  * Common bridge tokens used as intermediaries for multi-hop routing.
  * Ordered by preference (most liquid first).
  */
-const BRIDGE_TOKENS = ["WMNT", "USDC", "USDT0", "USDe", "WETH"] as const;
+const BRIDGE_TOKENS = ["WMNT", "USDC", "USDT0", "USDT", "USDe", "WETH"] as const;
 
 /** Derive chain ID from network config instead of hardcoding. */
 function chainId(network: Network): number {
@@ -141,10 +141,18 @@ function requireAaveReserve(symbolOrAddress: string): AaveReserveAsset {
     findReserveBySymbol(symbolOrAddress) ??
     findReserveByUnderlying(symbolOrAddress);
   if (!reserve) {
+    // Specific guidance when user tries USDT (not USDT0) on Aave
+    const isUsdt =
+      symbolOrAddress.toUpperCase() === "USDT" ||
+      symbolOrAddress.toLowerCase() === "0x201eba5cc46d216ce6dc03f6a759e8e766e956ae";
+    const hint = isUsdt
+      ? "Aave V3 on Mantle only supports USDT0 (0x779Ded0c9e1022225f8E0630b35a9b54bE713736), not USDT. " +
+        "Swap USDT → USDT0 on Merchant Moe first (USDT/USDT0 pool, bin_step=1), then retry with USDT0."
+      : `Supported assets: ${aaveReserveSymbols().join(", ")}.`;
     throw new MantleMcpError(
       "UNSUPPORTED_AAVE_ASSET",
       `'${symbolOrAddress}' is not a supported Aave V3 reserve on Mantle.`,
-      `Supported assets: ${aaveReserveSymbols().join(", ")}.`,
+      hint,
       { asset: symbolOrAddress, supported: aaveReserveSymbols() }
     );
   }
@@ -219,7 +227,7 @@ async function resolveToken(
     throw new MantleMcpError(
       "TOKEN_NOT_FOUND",
       `Cannot determine decimals for token '${input}'. Provide a known symbol or token address from the Mantle token list.`,
-      "Use a well-known token symbol (WMNT, USDC, USDT, USDe, mETH) or a verified address.",
+      "Use a well-known token symbol (WMNT, USDC, USDT, USDT0, USDe, mETH) or a verified address.",
       { token: input }
     );
   }
@@ -655,6 +663,7 @@ const BRIDGE_TOKEN_ADDRESSES: Record<string, string> = {
   WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
   USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
   USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
   USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
   WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
 };
@@ -3114,6 +3123,7 @@ export const defiWriteTools: Record<string, Tool> = {
     name: "mantle_buildAaveSupply",
     description:
       "Build an unsigned Aave V3 supply (deposit) transaction. Remember to approve the asset for the Pool contract first.\n\n" +
+      "IMPORTANT: Only USDT0 is supported on Aave V3 — NOT USDT. If the user holds USDT, swap USDT → USDT0 on Merchant Moe first.\n\n" +
       "ISOLATION MODE: WETH and WMNT are Isolation Mode assets. Supplying them as your ONLY collateral " +
       "restricts borrows to: USDC, USDT0, USDe, GHO. Other assets CANNOT be borrowed in Isolation Mode.\n\n" +
       "Examples:\n- Supply 100 USDC: asset='USDC', amount='100', on_behalf_of='0x...'\n- Supply 10 WMNT: asset='WMNT', amount='10', on_behalf_of='0x...'",
@@ -3146,6 +3156,7 @@ export const defiWriteTools: Record<string, Tool> = {
     name: "mantle_buildAaveBorrow",
     description:
       "Build an unsigned Aave V3 borrow transaction. Requires sufficient collateral deposited first.\n\n" +
+      "IMPORTANT: Only USDT0 is supported on Aave V3 — NOT USDT. If the user wants to borrow Tether, use asset='USDT0'.\n\n" +
       "ISOLATION MODE: If the borrower's only collateral is an Isolation Mode asset (WETH, WMNT), " +
       "they can ONLY borrow assets flagged as borrowableInIsolation: USDC, USDT0, USDe, GHO. " +
       "Attempting to borrow other assets (sUSDe, FBTC, syrupUSDT, wrsETH, WETH, WMNT) will REVERT.\n\n" +

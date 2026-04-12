@@ -1,6 +1,6 @@
 {
   "name": "@0xwh1sker/mantle-core",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Core business logic for Mantle L2 — chain reads, DeFi queries, and unsigned transaction building",
   "type": "module",

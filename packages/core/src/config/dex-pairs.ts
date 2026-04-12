@@ -76,7 +76,7 @@ export const TOKENS = {
 // ---------------------------------------------------------------------------
 
 const MOE_PAIRS: MoePair[] = [
-  // ---- Stablecoin pairs (bin_step = 1, LB V2.2 pools) ----
+  // ---- USDT0 stablecoin pairs (bin_step = 1, LB V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "USDC", tokenB: "USDT0",
@@ -99,13 +99,46 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 1, version: 2, routerVersion: 3
   },
 
-  // ---- WMNT pairs (bin_step=25, V2.2 pools) ----
+  // ---- USDT stablecoin pairs (LB V2.2 pools) ----
+  // NOTE: Mantle has two official USDT assets — USDT (bridged Tether) and
+  // USDT0 (LayerZero OFT). Both have active DEX liquidity; only USDT0 is
+  // supported on Aave V3.
+  {
+    provider: "merchant_moe",
+    tokenA: "USDC", tokenB: "USDT",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDT,
+    pool: "0x48c1a89af1102cad358549e9bb16ae5f96cddfec",
+    binStep: 1, version: 2, routerVersion: 3
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "USDe", tokenB: "USDT",
+    tokenAAddress: TOKENS.USDe, tokenBAddress: TOKENS.USDT,
+    pool: "0x7ccd8a769d466340fff36c6e10ffa8cf9077d988",
+    binStep: 1, version: 2, routerVersion: 3
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "USDT", tokenB: "USDT0",
+    tokenAAddress: TOKENS.USDT, tokenBAddress: TOKENS.USDT0,
+    pool: "0xfc9D88653E2988B0e6525f1F521c974a25c88566",
+    binStep: 1, version: 2, routerVersion: 3
+  },
+
+  // ---- WMNT pairs (V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDT0",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
     pool: "0xC0729cDE19741dE280b230D650F0fDad2aD79D09",
     binStep: 25, version: 2
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "WMNT", tokenB: "USDT",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT,
+    pool: "0xf6C9020c9E915808481757779EDB53DACEaE2415",
+    binStep: 15, version: 2
   },
   {
     provider: "merchant_moe",
@@ -136,6 +169,27 @@ const MOE_PAIRS: MoePair[] = [
     tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.mETH,
     pool: "0x3d887CE4988fb46AEC6E0027171f65DB3526E5f1",
     binStep: 1, version: 2
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "WETH", tokenB: "USDT",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDT,
+    pool: "0xa15C851Afc33aaB6E478d538a4A8C66cacC19686",
+    binStep: 10, version: 2
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "mETH", tokenB: "USDT",
+    tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.USDT,
+    pool: "0x3f0047606dCad6177C13742F1854Fc8c999CD2b6",
+    binStep: 10, version: 2
+  },
+  {
+    provider: "merchant_moe",
+    tokenA: "cmETH", tokenB: "USDT",
+    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.USDT,
+    pool: "0x91c5aee46eba5f6b38b962ee248b9cef04b05244",
+    binStep: 10, version: 2
   }
 ];
 
@@ -164,9 +218,32 @@ const AGNI_PAIRS: V3Pair[] = [
     tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.WETH,
     pool: "0x4f9e3683a523b66da89d82bba0a9caa1c3243df4",
     feeTier: 500 // 0.05%
-  }
+  },
   // NOTE: USDT0/WMNT removed — pool 0x07c410... has no deployed contract
   // and Agni factory returns zero-address at all fee tiers.
+
+  // ---- USDT pairs on Agni ----
+  {
+    provider: "agni",
+    tokenA: "USDC", tokenB: "USDT",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDT,
+    pool: "0x6488f911c6Cd86c289aa319C5A826Dcf8F1cA065",
+    feeTier: 100 // 0.01%
+  },
+  {
+    provider: "agni",
+    tokenA: "WMNT", tokenB: "USDT",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT,
+    pool: "0xD08C50F7E69e9aEB2867DefF4A8053d9A855e26A",
+    feeTier: 500 // 0.05%
+  },
+  {
+    provider: "agni",
+    tokenA: "WETH", tokenB: "USDT",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDT,
+    pool: "0x628f7131CF43e88EBe3921Ae78C4bA0C31872bd4",
+    feeTier: 500 // 0.05%
+  }
 ];
 
 // ---------------------------------------------------------------------------
@@ -205,6 +282,13 @@ const FLUXION_PAIRS: V3Pair[] = [
     tokenA: "WMNT", tokenB: "USDT0",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
     pool: "0x373c05fbe686fa1f3abf5e37ac74c4fac73d2e95",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "WMNT", tokenB: "USDT",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT,
+    pool: "0xc0c94deE13fBD76faB0633924f4fA73e12EC3a1A",
     feeTier: 3000
   },
   {
