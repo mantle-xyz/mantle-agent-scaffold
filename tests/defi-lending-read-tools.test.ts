@@ -10,6 +10,7 @@ const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 /** Build a mock client that supports readContract and multicall. */
 function mockClient(opts: {
   accountData?: [bigint, bigint, bigint, bigint, bigint, bigint];
+  userConfigBitmap?: bigint;
   reserveDataResults?: Array<{ status: string; result?: any }>;
   balanceResults?: Array<{ status: string; result?: any }>;
 }) {
@@ -17,6 +18,9 @@ function mockClient(opts: {
     readContract: async ({ functionName }: { functionName: string }) => {
       if (functionName === "getUserAccountData") {
         return opts.accountData ?? [0n, 0n, 0n, 0n, 0n, 2n ** 256n - 1n];
+      }
+      if (functionName === "getUserConfiguration") {
+        return opts.userConfigBitmap ?? 0n;
       }
       throw new Error(`Unexpected readContract: ${functionName}`);
     },
@@ -188,6 +192,66 @@ describe("defi lending read tools", () => {
       )) as any;
       expect(result.account.health_status).toBe(expected);
     }
+  });
+
+  it("includes per-reserve collateral_enabled from getUserConfiguration bitmap", async () => {
+    // WMNT (reserve id=1): collateral bit is at position 1*2+1 = 3
+    // Set bit 3 to 1 → userConfigBitmap = 0b1000 = 8n
+    const wmntCollateralBitmap = 1n << 3n; // bit 3 = WMNT collateral enabled
+
+    // Supply 10 WMNT (reserve idx 1, 18 decimals)
+    const balanceResults: Array<{ status: string; result: bigint }> = [];
+    for (let i = 0; i < 10; i++) {
+      balanceResults.push({
+        status: "success",
+        result: i === 1 ? 10_000000000000000000n : 0n // 10 WMNT
+      });
+      balanceResults.push({ status: "success", result: 0n }); // no debt
+    }
+
+    const result = (await getAavePositions(
+      { user: "0x1111111111111111111111111111111111111111", network: "mainnet" },
+      {
+        getClient: mockClient({
+          accountData: [10_00000000n, 0n, 5_00000000n, 8000n, 7500n, 2n ** 256n - 1n],
+          userConfigBitmap: wmntCollateralBitmap,
+          balanceResults
+        }),
+        now: () => "2026-04-11T00:00:00.000Z"
+      }
+    )) as any;
+
+    expect(result.positions).toHaveLength(1);
+    expect(result.positions[0].symbol).toBe("WMNT");
+    expect(result.positions[0].collateral_enabled).toBe(true);
+  });
+
+  it("reports collateral_enabled=false when bitmap bit is not set", async () => {
+    // WMNT has supply but collateral bit is NOT set (bitmap = 0)
+    const balanceResults: Array<{ status: string; result: bigint }> = [];
+    for (let i = 0; i < 10; i++) {
+      balanceResults.push({
+        status: "success",
+        result: i === 1 ? 10_000000000000000000n : 0n
+      });
+      balanceResults.push({ status: "success", result: 0n });
+    }
+
+    const result = (await getAavePositions(
+      { user: "0x1111111111111111111111111111111111111111", network: "mainnet" },
+      {
+        getClient: mockClient({
+          accountData: [0n, 0n, 0n, 0n, 0n, 2n ** 256n - 1n],
+          userConfigBitmap: 0n, // no collateral flags set
+          balanceResults
+        }),
+        now: () => "2026-04-11T00:00:00.000Z"
+      }
+    )) as any;
+
+    expect(result.positions).toHaveLength(1);
+    expect(result.positions[0].symbol).toBe("WMNT");
+    expect(result.positions[0].collateral_enabled).toBe(false);
   });
 
   it("throws on invalid address", async () => {

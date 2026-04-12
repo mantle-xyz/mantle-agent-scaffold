@@ -8,6 +8,7 @@ describe("server wiring", () => {
       "mantle_analyzePool",
       "mantle_buildAaveBorrow",
       "mantle_buildAaveRepay",
+      "mantle_buildAaveSetCollateral",
       "mantle_buildAaveSupply",
       "mantle_buildAaveWithdraw",
       "mantle_buildAddLiquidity",

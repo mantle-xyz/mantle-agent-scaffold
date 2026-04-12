@@ -141,6 +141,32 @@ export function registerAave(parent: Command): void {
       }
     });
 
+  // ── set-collateral ──────────────────────────────────────────────────
+  group
+    .command("set-collateral")
+    .description(
+      "Build unsigned Aave V3 transaction to enable/disable a supplied asset as collateral. " +
+      "The tx operates on msg.sender (the signing wallet). " +
+      "Use --user for preflight diagnostics (checks aToken balance, LTV, collateral status)."
+    )
+    .requiredOption("--asset <token>", "token symbol or address")
+    .option("--user <address>", "wallet address for preflight diagnostics (not encoded in tx)")
+    .option("--disable", "disable as collateral (default: enable)")
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const result = await allTools["mantle_buildAaveSetCollateral"].handler({
+        asset: opts.asset,
+        user: opts.user,
+        use_as_collateral: !opts.disable,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        formatAaveResult(result as Record<string, unknown>);
+      }
+    });
+
   // ── positions ───────────────────────────────────────────────────────
   group
     .command("positions")
@@ -202,6 +228,11 @@ export function registerAave(parent: Command): void {
             { key: "stable_debt", label: "Stable Debt", align: "right",
               format: (v) => v === "0.0" || v === "0" ? "-" : String(v) },
             { key: "total_debt", label: "Total Debt", align: "right" },
+            {
+              key: "collateral_enabled",
+              label: "Collateral",
+              format: (v) => (v === true ? "YES" : v === false ? "NO" : "?")
+            },
             {
               key: "isolation_mode",
               label: "Isolation",

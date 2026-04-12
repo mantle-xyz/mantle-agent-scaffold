@@ -106,7 +106,7 @@ import {
 // ABIs
 import { WMNT_ABI } from "../lib/abis/wmnt.js";
 import { V3_SWAP_ROUTER_ABI, V3_POSITION_MANAGER_ABI } from "../lib/abis/uniswap-v3.js";
-import { LB_ROUTER_ABI, MOE_ROUTER_ABI } from "../lib/abis/merchant-moe-lb.js";
+import { LB_ROUTER_ABI, MOE_ROUTER_ABI, LB_QUOTER_ABI, LB_FACTORY_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-pool.js";
 
 // ---------------------------------------------------------------------------
@@ -318,6 +318,14 @@ interface UnsignedTxResult {
     token_in?: { symbol: string; decimals: number; address: string };
     token_out?: { symbol: string; decimals: number; address: string };
   };
+  /** Pool parameters used for the swap — enables cross-validation with quote. */
+  pool_params?: {
+    provider: string;
+    fee_tier?: number;
+    bin_step?: number;
+    router_version?: number;
+    pool_address?: string;
+  };
   /** Present on Aave operations — the reserve's aToken and debt token. */
   aave_reserve?: {
     symbol: string;
@@ -325,6 +333,15 @@ interface UnsignedTxResult {
     aToken: string;
     variableDebtToken: string;
     decimals: number;
+  };
+  /** Present on set-collateral: on-chain diagnostic reads before building the tx. */
+  diagnostics?: {
+    atoken_balance: string | null;
+    collateral_already_enabled: boolean | null;
+    reserve_ltv_bps: number | null;
+    reserve_active: boolean | null;
+    reserve_frozen: boolean | null;
+    diagnosis: string;
   };
 }
 
@@ -562,6 +579,36 @@ function findV3Route(
   return null;
 }
 
+import {
+  discoverBestV3Pool as discoverBestV3PoolShared,
+  type DiscoveredPool
+} from "../lib/pool-discovery.js";
+
+/**
+ * Thin wrapper around the shared pool discovery that resolves
+ * the factory address from the protocol registry.
+ */
+async function discoverBestV3Pool(
+  provider: "agni" | "fluxion",
+  tokenIn: ResolvedToken,
+  tokenOut: ResolvedToken,
+  network: Network,
+  d: DefiWriteDeps
+): Promise<DiscoveredPool | null> {
+  let factoryAddress: `0x${string}`;
+  try {
+    factoryAddress = getContractAddress(provider, "factory", network) as `0x${string}`;
+  } catch {
+    return null;
+  }
+  return discoverBestV3PoolShared(
+    d.getClient(network),
+    factoryAddress,
+    tokenIn.address as `0x${string}`,
+    tokenOut.address as `0x${string}`
+  );
+}
+
 /**
  * Find a 2-hop Merchant Moe route via common bridge tokens.
  */
@@ -598,6 +645,172 @@ function findMoeRoute(
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// LB Quoter-based multi-hop route discovery (on-chain fallback)
+// ---------------------------------------------------------------------------
+
+const BRIDGE_TOKEN_ADDRESSES: Record<string, string> = {
+  WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+  USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+  USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+  WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
+};
+
+interface MoeQuoterRoute {
+  tokenPath: string[];
+  binSteps: number[];
+  versions: number[];
+  amountOut: bigint;
+}
+
+/**
+ * Use the Merchant Moe LB Quoter to discover routes on-chain.
+ * Tries direct path + all 2-hop paths via bridge tokens.
+ */
+async function discoverMoeRouteViaQuoter(
+  tokenIn: ResolvedToken,
+  tokenOut: ResolvedToken,
+  amountInRaw: bigint,
+  network: Network,
+  d: DefiWriteDeps
+): Promise<MoeQuoterRoute | null> {
+  let quoterAddr: string;
+  try {
+    quoterAddr = getContractAddress("merchant_moe", "lb_quoter_v2_2", network);
+  } catch {
+    return null;
+  }
+
+  const client = d.getClient(network);
+  const inAddr = tokenIn.address as `0x${string}`;
+  const outAddr = tokenOut.address as `0x${string}`;
+
+  // Build candidate routes
+  const routes: `0x${string}`[][] = [[inAddr, outAddr]];
+  for (const [, bridgeAddr] of Object.entries(BRIDGE_TOKEN_ADDRESSES)) {
+    const bridge = bridgeAddr as `0x${string}`;
+    if (bridge.toLowerCase() === inAddr.toLowerCase()) continue;
+    if (bridge.toLowerCase() === outAddr.toLowerCase()) continue;
+    routes.push([inAddr, bridge, outAddr]);
+  }
+
+  const results = await Promise.allSettled(
+    routes.map((route) =>
+      client.readContract({
+        address: quoterAddr as `0x${string}`,
+        abi: LB_QUOTER_ABI,
+        functionName: "findBestPathFromAmountIn",
+        args: [route, amountInRaw]
+      })
+    )
+  );
+
+  let best: MoeQuoterRoute | null = null;
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const quote = result.value as {
+      route: readonly string[];
+      binSteps: readonly bigint[];
+      versions: readonly bigint[];
+      amounts: readonly bigint[];
+    };
+
+    const amounts = quote.amounts;
+    if (!amounts || amounts.length === 0) continue;
+    const amountOut = amounts[amounts.length - 1];
+    if (amountOut <= 0n) continue;
+
+    if (best === null || amountOut > best.amountOut) {
+      best = {
+        tokenPath: Array.from(quote.route).map(String),
+        binSteps: Array.from(quote.binSteps).map(Number),
+        versions: Array.from(quote.versions).map(Number),
+        amountOut
+      };
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Build a Moe swap transaction using route info from the LB Quoter.
+ */
+function buildMoeMultihopSwapFromQuoter(params: {
+  quoterRoute: MoeQuoterRoute;
+  tokenIn: ResolvedToken;
+  tokenOut: ResolvedToken;
+  amountInRaw: bigint;
+  amountInDecimal: string;
+  amountOutMin: bigint;
+  recipient: string;
+  deadline: bigint;
+  network: Network;
+  now: string;
+}): UnsignedTxResult {
+  const {
+    quoterRoute, tokenIn, tokenOut, amountInRaw, amountInDecimal,
+    amountOutMin, recipient, deadline, network, now
+  } = params;
+
+  const routerAddress = getContractAddress("merchant_moe", "lb_router_v2_2", network);
+
+  const path = {
+    pairBinSteps: quoterRoute.binSteps.map(BigInt),
+    versions: quoterRoute.versions,
+    tokenPath: quoterRoute.tokenPath.map((a) => a as `0x${string}`)
+  };
+
+  const data = encodeFunctionData({
+    abi: LB_ROUTER_ABI,
+    functionName: "swapExactTokensForTokens",
+    args: [amountInRaw, amountOutMin, path, recipient as `0x${string}`, deadline]
+  });
+
+  const isMultihop = quoterRoute.tokenPath.length > 2;
+  const hops = quoterRoute.tokenPath.map((_, i) =>
+    i < quoterRoute.tokenPath.length - 1 ? `step${i + 1}` : ""
+  ).filter(Boolean).join("→");
+
+  const warnings: string[] = [];
+  if (amountOutMin === 0n) {
+    warnings.push(
+      "WARNING: amountOutMin is 0 — this swap has NO slippage protection."
+    );
+  }
+  if (isMultihop) {
+    warnings.push(
+      `Multi-hop route discovered on-chain via LB Quoter: ${quoterRoute.tokenPath.length} tokens, ` +
+      `binSteps: ${quoterRoute.binSteps.join(" → ")}`
+    );
+  }
+
+  return {
+    intent: isMultihop ? "swap_multihop" : "swap",
+    human_summary: `Swap ${amountInDecimal} ${tokenIn.symbol} → ${tokenOut.symbol} on Merchant Moe LB` +
+      (isMultihop ? ` (${quoterRoute.tokenPath.length - 1}-hop, on-chain route)` : ` (bin step: ${quoterRoute.binSteps[0]})`),
+    unsigned_tx: {
+      to: routerAddress,
+      data,
+      value: "0x0",
+      chainId: chainId(network),
+      gas: isMultihop ? "0x9EB10" : "0x7A120"
+    },
+    token_info: {
+      token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
+      token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
+    },
+    pool_params: {
+      provider: "merchant_moe",
+      bin_step: quoterRoute.binSteps[0]
+    },
+    warnings,
+    built_at_utc: now
+  };
 }
 
 // =========================================================================
@@ -655,16 +868,44 @@ export async function buildSwap(
   const deadline = d.deadline();
 
   if (provider === "agni" || provider === "fluxion") {
-    // Resolve fee_tier: caller > known pair > multi-hop > error
+    // Resolve fee_tier: caller-explicit > on-chain discovery > multi-hop > error
     let feeTier: number | undefined;
     if (typeof args.fee_tier === "number") {
+      // User explicitly provided fee_tier — trust it
       feeTier = args.fee_tier;
-    } else if (knownPair && knownPair.provider !== "merchant_moe") {
-      feeTier = (knownPair as V3Pair).feeTier;
+    } else {
+      // Auto-detect: query V3 factory for all common fee tiers and pick
+      // the pool with the highest on-chain liquidity. This avoids the
+      // stale-registry problem where a hardcoded fee_tier pool may have
+      // migrated or lost liquidity.
+      const bestPool = await discoverBestV3Pool(provider, tokenIn, tokenOut, network, d);
+      if (bestPool) {
+        feeTier = bestPool.feeTier;
+      } else if (knownPair && knownPair.provider !== "merchant_moe") {
+        // Fallback to static registry (pool may exist but have 0 liquidity)
+        feeTier = (knownPair as V3Pair).feeTier;
+      }
     }
 
     if (feeTier !== undefined) {
-      return buildV3Swap({
+      // Cross-validate against quote parameters if provided
+      const quoteFeeTier = typeof args.quote_fee_tier === "number" ? args.quote_fee_tier : null;
+      const quoteProvider = typeof args.quote_provider === "string" ? args.quote_provider : null;
+      const crossWarnings: string[] = [];
+      if (quoteFeeTier != null && quoteFeeTier !== feeTier) {
+        crossWarnings.push(
+          `Quote used fee_tier ${quoteFeeTier} but build resolved fee_tier ${feeTier}. ` +
+          `The minimum_out from your quote may not provide accurate slippage protection.`
+        );
+      }
+      if (quoteProvider != null && quoteProvider !== provider) {
+        crossWarnings.push(
+          `Quote was from ${quoteProvider} but building on ${provider}. ` +
+          `The minimum_out may not provide accurate slippage protection.`
+        );
+      }
+
+      const result = buildV3Swap({
         provider,
         tokenIn,
         tokenOut,
@@ -678,6 +919,8 @@ export async function buildSwap(
         feeTier,
         now: d.now()
       });
+      result.warnings.push(...crossWarnings);
+      return result;
     }
 
     // No direct pair — try multi-hop via bridge token
@@ -709,24 +952,107 @@ export async function buildSwap(
     );
   }
 
-  // merchant_moe — resolve bin_step: caller > known pair > multi-hop > error
-  let binStep: number | undefined;
-  let routerVersion: number = 0; // default V1 — works for all Moe pools
+  // merchant_moe — resolve route:
+  //   caller-explicit bin_step > LB Quoter on-chain > static registry fallback
   if (typeof args.bin_step === "number") {
-    binStep = args.bin_step;
-  } else if (knownPair && knownPair.provider === "merchant_moe") {
-    binStep = (knownPair as MoePair).binStep;
-  }
-
-  if (binStep !== undefined) {
-    // Resolve router version: caller > known pair > default (0 = V1)
+    // User explicitly provided bin_step — resolve router_version from on-chain
+    // factory to avoid the V1-default (0) being wrong for V2.2 pools.
+    let routerVersion: number = 0;
     if (typeof args.router_version === "number") {
       routerVersion = args.router_version;
-    } else if (knownPair && knownPair.provider === "merchant_moe") {
-      routerVersion = (knownPair as MoePair).routerVersion ?? 0;
+    } else {
+      // Query LB Factory on-chain to get the real pair info and derive version
+      try {
+        const client = d.getClient(network);
+        const factoryAddr = getContractAddress("merchant_moe", "lb_factory_v2_2", network) as `0x${string}`;
+        const pairInfo = await client.readContract({
+          address: factoryAddr,
+          abi: LB_FACTORY_ABI,
+          functionName: "getLBPairInformation",
+          args: [
+            tokenIn.address as `0x${string}`,
+            tokenOut.address as `0x${string}`,
+            BigInt(args.bin_step as number)
+          ]
+        }) as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
+
+        if (pairInfo.LBPair && pairInfo.LBPair !== "0x0000000000000000000000000000000000000000") {
+          // V2.2 factory returned a valid pair → use router version 3 (V2.2)
+          routerVersion = 3;
+        }
+      } catch {
+        // Factory query failed — fall back to static registry or default
+        if (knownPair && knownPair.provider === "merchant_moe") {
+          routerVersion = (knownPair as MoePair).routerVersion ?? 0;
+        }
+      }
     }
 
     return buildMoeSwap({
+      tokenIn,
+      tokenOut,
+      amountInRaw,
+      amountInDecimal,
+      amountOutMin,
+      slippageBps,
+      recipient,
+      deadline,
+      network,
+      binStep: args.bin_step as number,
+      routerVersion,
+      now: d.now()
+    });
+  }
+
+  // On-chain primary: use LB Quoter to discover the best route
+  // (including multi-hop). This is the same quoter used by getSwapQuote,
+  // ensuring quote and build select the same route.
+  const moeQuoterRoute = await discoverMoeRouteViaQuoter(
+    tokenIn, tokenOut, amountInRaw, network, d
+  );
+  if (moeQuoterRoute) {
+    const result = buildMoeMultihopSwapFromQuoter({
+      quoterRoute: moeQuoterRoute,
+      tokenIn,
+      tokenOut,
+      amountInRaw,
+      amountInDecimal,
+      amountOutMin,
+      recipient,
+      deadline,
+      network,
+      now: d.now()
+    });
+
+    // Cross-validate against quote parameters if provided
+    const quoteBinStep = typeof args.quote_bin_step === "number" ? args.quote_bin_step : null;
+    const quoteProvider = typeof args.quote_provider === "string" ? args.quote_provider : null;
+    if (quoteBinStep != null && moeQuoterRoute.binSteps[0] !== quoteBinStep) {
+      result.warnings.push(
+        `Quote used bin_step ${quoteBinStep} but build resolved bin_step ${moeQuoterRoute.binSteps[0]}. ` +
+        `The minimum_out from your quote may not provide accurate slippage protection.`
+      );
+    }
+    if (quoteProvider != null && quoteProvider !== "merchant_moe") {
+      result.warnings.push(
+        `Quote was from ${quoteProvider} but building on merchant_moe. ` +
+        `The minimum_out may not provide accurate slippage protection.`
+      );
+    }
+
+    return result;
+  }
+
+  // Static registry fallback — only if LB Quoter fails/unavailable
+  let binStep: number | undefined;
+  let routerVersion: number = 0;
+  if (knownPair && knownPair.provider === "merchant_moe") {
+    binStep = (knownPair as MoePair).binStep;
+    routerVersion = (knownPair as MoePair).routerVersion ?? 0;
+  }
+
+  if (binStep !== undefined) {
+    const result = buildMoeSwap({
       tokenIn,
       tokenOut,
       amountInRaw,
@@ -740,12 +1066,17 @@ export async function buildSwap(
       routerVersion,
       now: d.now()
     });
+    result.warnings.push(
+      "LB Quoter unavailable — using static registry for bin_step. " +
+      "Route may differ from quote. Consider verifying with mantle_getSwapQuote."
+    );
+    return result;
   }
 
-  // No direct pair — try multi-hop via bridge token
+  // Static multi-hop fallback
   const moeRoute = findMoeRoute(tokenIn, tokenOut, network);
   if (moeRoute) {
-    return buildMoeMultihopSwap({
+    const result = buildMoeMultihopSwap({
       route: moeRoute,
       tokenIn,
       tokenOut,
@@ -757,6 +1088,11 @@ export async function buildSwap(
       network,
       now: d.now()
     });
+    result.warnings.push(
+      "LB Quoter unavailable — using static registry for multi-hop route. " +
+      "Route may differ from quote."
+    );
+    return result;
   }
 
   const available = listPairs("merchant_moe").map(
@@ -765,7 +1101,7 @@ export async function buildSwap(
   throw new MantleMcpError(
     "UNKNOWN_PAIR",
     `No known bin_step or multi-hop route for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. Provide bin_step explicitly.`,
-    `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 5 (LSTs), 20 (volatile).`,
+    `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 2 (LSTs), 25 (volatile).`,
     { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
   );
 }
@@ -841,6 +1177,10 @@ function buildV3Swap(params: {
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
       token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
+    },
+    pool_params: {
+      provider,
+      fee_tier: feeTier
     },
     warnings,
     built_at_utc: now
@@ -920,6 +1260,11 @@ function buildMoeSwap(params: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
       token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
     },
+    pool_params: {
+      provider: "merchant_moe",
+      bin_step: binStep,
+      router_version: routerVersion
+    },
     warnings,
     built_at_utc: now
   };
@@ -991,6 +1336,10 @@ function buildV3MultihopSwap(params: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
       token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
     },
+    pool_params: {
+      provider,
+      fee_tier: route.fees[0] // primary leg fee tier
+    },
     warnings,
     built_at_utc: now
   };
@@ -1051,6 +1400,10 @@ function buildMoeMultihopSwap(params: {
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
       token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
+    },
+    pool_params: {
+      provider: "merchant_moe",
+      bin_step: route.binSteps[0]
     },
     warnings,
     built_at_utc: now
@@ -1286,7 +1639,7 @@ export async function buildAddLiquidity(
     recipient,
     deadline,
     network,
-    binStep: typeof args.bin_step === "number" ? args.bin_step : 20,
+    binStep: typeof args.bin_step === "number" ? args.bin_step : 25,
     activeIdDesired:
       typeof args.active_id === "number" ? args.active_id : 8388608,
     idSlippage: typeof args.id_slippage === "number" ? args.id_slippage : 5,
@@ -1610,7 +1963,7 @@ export async function buildRemoveLiquidity(
     network
   );
   const binStep =
-    typeof args.bin_step === "number" ? args.bin_step : 20;
+    typeof args.bin_step === "number" ? args.bin_step : 25;
 
   const data = encodeFunctionData({
     abi: LB_ROUTER_ABI,
@@ -1767,7 +2120,15 @@ export async function buildAaveSupply(
     `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
   ];
 
-  // ── Isolation Mode warning ──────────────────────────────────────────
+  // ── Isolation Mode warning (includes collateral check guidance) ─────
+  if (reserve.isolationMode) {
+    warnings.push(
+      `COLLATERAL CHECK: ${reserve.symbol} is an Isolation Mode asset. After supply, verify ` +
+      `getUserAccountData shows totalCollateralBase > 0. If collateral was not auto-enabled, ` +
+      `call mantle_buildAaveSetCollateral with user=<address> to diagnose and fix.`
+    );
+  }
+
   if (reserve.isolationMode) {
     const ceilingUsd = reserve.debtCeilingUsd.toLocaleString("en-US");
     const borrowable = isolationBorrowableSymbols().join(", ");
@@ -2065,7 +2426,258 @@ export async function buildAaveWithdraw(
 }
 
 // =========================================================================
-// Tool 11: mantle_getSwapPairs (read-only — returns known pair configs)
+// Tool 11: mantle_buildAaveSetCollateral
+// =========================================================================
+
+/**
+ * Decode reserve-level LTV and active/frozen flags from the Aave V3
+ * configuration bitmap returned by Pool.getConfiguration(asset).
+ *
+ * Layout (see DataTypes.sol):
+ *   bits  0-15  LTV (in basis points, 0 = cannot be used as collateral)
+ *   bit   56    active
+ *   bit   57    frozen
+ */
+function decodeReserveConfig(bitmap: bigint): {
+  ltvBps: number;
+  active: boolean;
+  frozen: boolean;
+} {
+  const ltvBps = Number(bitmap & 0xFFFFn);
+  const active = (bitmap >> 56n & 1n) === 1n;
+  const frozen = (bitmap >> 57n & 1n) === 1n;
+  return { ltvBps, active, frozen };
+}
+
+/**
+ * Check whether a specific reserve's collateral flag is set for a user
+ * from the bitmap returned by Pool.getUserConfiguration(user).
+ *
+ * Layout: for each reserve with id `i`:
+ *   bit  i * 2      isBorrowing
+ *   bit  i * 2 + 1  isUsingAsCollateral
+ */
+function isCollateralEnabled(userConfigBitmap: bigint, reserveId: number): boolean {
+  const bit = BigInt(reserveId * 2 + 1);
+  return (userConfigBitmap >> bit & 1n) === 1n;
+}
+
+export async function buildAaveSetCollateral(
+  args: Record<string, unknown>,
+  deps?: Partial<DefiWriteDeps>
+): Promise<UnsignedTxResult> {
+  const d = withDeps(deps);
+  const { network } = normalizeNetwork(args);
+
+  const assetInput = requireString(args.asset, "asset");
+  const reserve = requireAaveReserve(assetInput);
+  const asset = await resolveToken(d, reserve.underlying, network);
+
+  // Default to enabling collateral (true) — the common case is fixing
+  // a supply that didn't auto-enable collateral.
+  const useAsCollateral =
+    args.use_as_collateral === false || args.use_as_collateral === "false"
+      ? false
+      : true;
+
+  const poolAddress = getContractAddress("aave_v3", "pool", network);
+  const action = useAsCollateral ? "Enable" : "Disable";
+  const warnings: string[] = [];
+
+  // ── msg.sender semantics ──────────────────────────────────────────
+  // setUserUseReserveAsCollateral operates on msg.sender, NOT an
+  // arbitrary address.  The `user` param is only used for preflight
+  // diagnostics below — it is NOT encoded into the transaction.
+  const userRaw = args.user ?? args.on_behalf_of;
+  const user = typeof userRaw === "string" && isAddress(userRaw, { strict: false })
+    ? getAddress(userRaw) as `0x${string}`
+    : null;
+
+  warnings.push(
+    "MSG.SENDER: This transaction operates on the signing wallet (msg.sender), " +
+    "not an arbitrary address. The signer must be the user who supplied the asset."
+  );
+
+  // ── Preflight diagnostics (best-effort, non-blocking) ────────────
+  // Read on-chain state to diagnose the actual condition and warn early
+  // if the tx would revert or be a no-op.
+  let diagnostics: NonNullable<UnsignedTxResult["diagnostics"]> = {
+    atoken_balance: null,
+    collateral_already_enabled: null,
+    reserve_ltv_bps: null,
+    reserve_active: null,
+    reserve_frozen: null,
+    diagnosis: "preflight_skipped"
+  };
+
+  if (user) {
+    try {
+      const client = d.getClient(network);
+
+      // Batch three reads: aToken balance, reserve config, user config
+      const [aTokenResult, reserveConfigResult, userConfigResult] = await client.multicall({
+        contracts: [
+          {
+            address: reserve.aToken as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf" as const,
+            args: [user]
+          },
+          {
+            address: poolAddress as `0x${string}`,
+            abi: AAVE_V3_POOL_ABI,
+            functionName: "getConfiguration" as const,
+            args: [asset.address as `0x${string}`]
+          },
+          {
+            address: poolAddress as `0x${string}`,
+            abi: AAVE_V3_POOL_ABI,
+            functionName: "getUserConfiguration" as const,
+            args: [user]
+          }
+        ]
+      });
+
+      // Parse aToken balance
+      const aTokenBalance = aTokenResult.status === "success"
+        ? (aTokenResult.result as bigint) : null;
+
+      // Parse reserve configuration
+      let reserveConfig: ReturnType<typeof decodeReserveConfig> | null = null;
+      if (reserveConfigResult.status === "success") {
+        const raw = reserveConfigResult.result as bigint;
+        reserveConfig = decodeReserveConfig(raw);
+      }
+
+      // Parse user configuration
+      let collateralEnabled: boolean | null = null;
+      if (userConfigResult.status === "success") {
+        const raw = userConfigResult.result as bigint;
+        collateralEnabled = isCollateralEnabled(raw, reserve.id);
+      }
+
+      diagnostics = {
+        atoken_balance: aTokenBalance !== null
+          ? formatUnits(aTokenBalance, reserve.decimals)
+          : null,
+        collateral_already_enabled: collateralEnabled,
+        reserve_ltv_bps: reserveConfig?.ltvBps ?? null,
+        reserve_active: reserveConfig?.active ?? null,
+        reserve_frozen: reserveConfig?.frozen ?? null,
+        diagnosis: "ok"
+      };
+
+      // ── Fail-closed checks ──────────────────────────────────────
+      if (aTokenBalance !== null && aTokenBalance === 0n) {
+        throw new MantleMcpError(
+          "NO_SUPPLY_BALANCE",
+          `Cannot ${action.toLowerCase()} collateral for ${reserve.symbol}: ` +
+          `user ${user} has no aToken balance (0 supplied).`,
+          `Supply ${reserve.symbol} to Aave first before enabling it as collateral.`,
+          { user, asset: reserve.symbol }
+        );
+      }
+
+      if (reserveConfig && !reserveConfig.active) {
+        throw new MantleMcpError(
+          "RESERVE_NOT_ACTIVE",
+          `Cannot ${action.toLowerCase()} collateral for ${reserve.symbol}: reserve is not active.`,
+          "This reserve may have been deactivated by Aave governance.",
+          { asset: reserve.symbol }
+        );
+      }
+
+      if (reserveConfig && reserveConfig.frozen) {
+        warnings.push(
+          `WARNING: ${reserve.symbol} reserve is FROZEN. The collateral toggle may still work ` +
+          `but no new borrows or supplies are accepted.`
+        );
+      }
+
+      if (useAsCollateral && reserveConfig && reserveConfig.ltvBps === 0) {
+        throw new MantleMcpError(
+          "LTV_IS_ZERO",
+          `Cannot enable ${reserve.symbol} as collateral: on-chain LTV is 0 basis points.`,
+          `${reserve.symbol} is configured with LTV=0 by Aave governance on Mantle, ` +
+          `meaning it cannot be used as collateral regardless of the collateral flag. ` +
+          `This is likely the root cause of borrow failures — not a missing collateral toggle.`,
+          { asset: reserve.symbol, ltvBps: 0 }
+        );
+      }
+
+      if (collateralEnabled !== null && collateralEnabled === useAsCollateral) {
+        const state = useAsCollateral ? "enabled" : "disabled";
+        warnings.push(
+          `NO-OP: Collateral for ${reserve.symbol} is already ${state} for user ${user}. ` +
+          `This transaction would have no effect. If borrow still fails, the root cause ` +
+          `is likely oracle pricing, LTV configuration, or reserve status — not the collateral flag.`
+        );
+        diagnostics.diagnosis = "already_in_desired_state";
+      }
+    } catch (e) {
+      // Re-throw our own errors; swallow RPC failures as non-blocking
+      if (e instanceof MantleMcpError) throw e;
+      warnings.push(
+        `Preflight diagnostics failed (RPC error). The transaction was still built ` +
+        `but could not verify on-chain state. Proceed with caution.`
+      );
+      diagnostics.diagnosis = "preflight_rpc_error";
+    }
+  } else {
+    warnings.push(
+      "No user address provided — preflight diagnostics were skipped. " +
+      "Pass user=<address> to enable on-chain checks before building the transaction."
+    );
+  }
+
+  if (reserve.isolationMode && useAsCollateral) {
+    const borrowable = isolationBorrowableSymbols().join(", ");
+    warnings.push(
+      `ISOLATION MODE: ${reserve.symbol} is an Isolation Mode asset. ` +
+      `If this is your ONLY collateral you will be in Isolation Mode and can ONLY borrow: ${borrowable}.`
+    );
+  }
+
+  if (!useAsCollateral) {
+    warnings.push(
+      "Disabling collateral will reduce your borrowing capacity and may lower your health factor. " +
+      "If your health factor drops below 1, you may be liquidated."
+    );
+  }
+
+  const data = encodeFunctionData({
+    abi: AAVE_V3_POOL_ABI,
+    functionName: "setUserUseReserveAsCollateral",
+    args: [
+      asset.address as `0x${string}`,
+      useAsCollateral
+    ]
+  });
+
+  return {
+    intent: "aave_set_collateral",
+    human_summary: `${action} ${reserve.symbol} as collateral on Aave V3`,
+    unsigned_tx: {
+      to: poolAddress,
+      data,
+      value: "0x0",
+      chainId: chainId(network)
+    },
+    warnings,
+    diagnostics,
+    aave_reserve: {
+      symbol: reserve.symbol,
+      underlying: reserve.underlying,
+      aToken: reserve.aToken,
+      variableDebtToken: reserve.variableDebtToken,
+      decimals: reserve.decimals
+    },
+    built_at_utc: d.now()
+  };
+}
+
+// =========================================================================
+// Tool 12: mantle_getSwapPairs (read-only — returns known pair configs)
 // =========================================================================
 
 export async function getSwapPairs(
@@ -2278,7 +2890,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-resolved from known pairs; override only if needed.\n\nWORKFLOW:\n1. Call mantle_getSwapPairs({ provider }) to see available pairs and their params\n2. Call mantle_getSwapQuote to get expected output amount\n3. Call mantle_buildApprove for token_in → router (if allowance insufficient)\n4. Call mantle_buildSwap with amount_out_min from the quote\n5. Sign and broadcast each unsigned_tx (value field is hex-encoded)\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...' (bin_step auto-resolved to 1)\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...' (fee_tier auto-resolved to 10000)",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote to get expected output, provider, and resolved_pool_params\n2. Call mantle_buildApprove for token_in → router (if allowance insufficient)\n3. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, and quote_fee_tier/quote_provider from resolved_pool_params for cross-validation\n4. Sign and broadcast each unsigned_tx\n\nThe response includes pool_params showing the actual fee_tier/bin_step used — compare with your quote's resolved_pool_params to verify consistency.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -2322,11 +2934,23 @@ export const defiWriteTools: Record<string, Tool> = {
         bin_step: {
           type: "number",
           description:
-            "LB bin step (1=stablecoins, 5=LSTs, 20=volatile). Auto-resolved from known pairs for merchant_moe."
+            "LB bin step (1=stablecoins, 2=LSTs, 25=volatile). Auto-resolved from known pairs for merchant_moe."
         },
         network: {
           type: "string",
           description: "Network: 'mainnet' (default) or 'sepolia'."
+        },
+        quote_provider: {
+          type: "string",
+          description: "Provider from a prior getSwapQuote call. Used to cross-validate consistency — emits a warning if build resolves a different provider."
+        },
+        quote_fee_tier: {
+          type: "number",
+          description: "Fee tier from a prior getSwapQuote resolved_pool_params. Used to cross-validate — emits a warning if build resolves a different fee tier."
+        },
+        quote_bin_step: {
+          type: "number",
+          description: "Bin step from a prior getSwapQuote resolved_pool_params. Used to cross-validate — emits a warning if build resolves a different bin step."
         }
       },
       required: ["provider", "token_in", "token_out", "amount_in", "recipient"]
@@ -2389,7 +3013,7 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         bin_step: {
           type: "number",
-          description: "LB bin step (default: 20). For merchant_moe."
+          description: "LB bin step (default: 25). For merchant_moe."
         },
         active_id: {
           type: "number",
@@ -2615,6 +3239,53 @@ export const defiWriteTools: Record<string, Tool> = {
       required: ["asset", "amount", "to"]
     },
     handler: buildAaveWithdraw
+  },
+
+  mantle_buildAaveSetCollateral: {
+    name: "mantle_buildAaveSetCollateral",
+    description:
+      "Build an unsigned Aave V3 transaction to enable or disable a supplied asset as collateral.\n\n" +
+      "MSG.SENDER: This transaction operates on the SIGNING WALLET (msg.sender), not an " +
+      "arbitrary address. The user param is only used for preflight diagnostics.\n\n" +
+      "DIAGNOSTICS: When user is provided, runs on-chain checks before building the tx:\n" +
+      "- Verifies aToken balance > 0 (user has actually supplied)\n" +
+      "- Checks reserve config (LTV > 0, active, not frozen)\n" +
+      "- Reads user config bitmap to detect if collateral is already enabled/disabled\n" +
+      "- Returns a diagnostics object with the findings\n\n" +
+      "If getUserAccountData shows totalCollateralBase=0 after a successful supply, " +
+      "possible causes (checked in order):\n" +
+      "1. Collateral flag not enabled → this tool fixes it\n" +
+      "2. Reserve LTV=0 on-chain → tool will error with LTV_IS_ZERO\n" +
+      "3. Oracle price=0 → collateral enabled but USD value is 0\n" +
+      "4. Reserve not active → tool will error with RESERVE_NOT_ACTIVE\n\n" +
+      "Examples:\n" +
+      "- Enable WMNT as collateral: asset='WMNT', user='0x...' (user for diagnostics)\n" +
+      "- Disable USDC as collateral: asset='USDC', user='0x...', use_as_collateral=false",
+    inputSchema: {
+      type: "object",
+      properties: {
+        asset: {
+          type: "string",
+          description: "Token symbol or address to enable/disable as collateral."
+        },
+        user: {
+          type: "string",
+          description:
+            "Wallet address for preflight diagnostics (aToken balance, collateral status, " +
+            "reserve config). NOT encoded into the tx — the tx always operates on msg.sender."
+        },
+        use_as_collateral: {
+          type: "boolean",
+          description: "true to enable as collateral (default), false to disable."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["asset"]
+    },
+    handler: buildAaveSetCollateral
   },
 
   mantle_getSwapPairs: {

@@ -248,7 +248,7 @@ const CAPABILITIES: CapabilityEntry[] = [
     auth: "none",
     summary: "Read on-chain state of a Merchant Moe Liquidity Book pair: active bin, reserves, nearby bins.",
     cli_command: "mantle-cli defi lb-state --token-a <token> --token-b <token> --bin-step <step> --json",
-    example: "{ \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"bin_step\": 20 }",
+    example: "{ \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"bin_step\": 25 }",
     tags: ["pool", "LB", "Merchant Moe", "bin", "state"]
   },
 
@@ -364,9 +364,9 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "execute",
     mutates: true,
     auth: "required",
-    summary: "Build unsigned swap tx on a whitelisted DEX. Requires amount_out_min from a prior quote for slippage protection.",
-    cli_command: "mantle-cli swap build-swap --provider <dex> --in <token> --out <token> --amount <n> --recipient <address> --amount-out-min <raw> --json",
-    example: "{ \"provider\": \"agni\", \"token_in\": \"WMNT\", \"token_out\": \"USDC\", \"amount_in\": \"10\", \"recipient\": \"0x1234...\", \"amount_out_min\": \"7500000\" }",
+    summary: "Build unsigned swap tx on a whitelisted DEX. Requires provider and amount_out_min from a prior mantle_getSwapQuote call. Auto-discovers best pool on-chain and supports multi-hop routing via LB Quoter.",
+    cli_command: "mantle-cli swap build-swap --provider <dex> --in <token> --out <token> --amount <n> --recipient <address> --amount-out-min <raw> --quote-provider <provider> --quote-fee-tier <tier> --json",
+    example: "{ \"provider\": \"agni\", \"token_in\": \"WMNT\", \"token_out\": \"USDC\", \"amount_in\": \"10\", \"recipient\": \"0x1234...\", \"amount_out_min\": \"7500000\", \"quote_provider\": \"agni\", \"quote_fee_tier\": 500 }",
     workflow_before: [],
     tags: ["swap", "DEX", "tx"]
   },
@@ -446,6 +446,18 @@ const CAPABILITIES: CapabilityEntry[] = [
     cli_command: "mantle-cli aave withdraw --asset <token> --amount <n|max> --to <addr> --json",
     example: "{ \"asset\": \"USDC\", \"amount\": \"50\", \"to\": \"0x1234...\" }",
     tags: ["Aave", "withdraw", "lending", "tx"]
+  },
+  {
+    id: "mantle_buildAaveSetCollateral",
+    name: "Build Aave Set Collateral",
+    category: "execute",
+    mutates: true,
+    auth: "required",
+    summary: "Build unsigned Aave V3 tx to enable/disable a supplied asset as collateral (operates on msg.sender). Runs preflight diagnostics when user is provided: checks aToken balance, reserve LTV/active/frozen, and per-reserve collateral bitmap.",
+    cli_command: "mantle-cli aave set-collateral --asset <token> [--user <addr>] [--disable] --json",
+    example: "{ \"asset\": \"WMNT\", \"user\": \"0x1234...\" }",
+    workflow_before: ["mantle_buildAaveBorrow"],
+    tags: ["Aave", "collateral", "lending", "tx", "diagnostics"]
   },
   {
     id: "mantle_getSwapPairs",

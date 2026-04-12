@@ -99,6 +99,21 @@ export async function getAavePositions(
   // Aave base currency has 8 decimals (USD with 8 dp)
   const BASE_DECIMALS = 8;
 
+  // 1b. Read user configuration bitmap for per-reserve collateral flags.
+  //     Bit layout: for reserve id `i`, bit i*2 = isBorrowing, bit i*2+1 = isUsingAsCollateral.
+  let userConfigBitmap: bigint | null = null;
+  try {
+    const userConfigRaw = (await client.readContract({
+      address: poolAddress,
+      abi: AAVE_V3_POOL_ABI,
+      functionName: "getUserConfiguration",
+      args: [user as `0x${string}`]
+    })) as bigint;
+    userConfigBitmap = userConfigRaw;
+  } catch {
+    // Non-blocking: if this fails, positions still work without collateral flags
+  }
+
   // 2. Read stableDebtToken addresses dynamically from getReserveData.
   //    This avoids hardcoding addresses the aave-address-book does not publish
   //    for Mantle, and resolves the read/write asymmetry with stable borrows.
@@ -174,6 +189,7 @@ export async function getAavePositions(
     total_debt_raw: string;
     total_debt: string;
     isolation_mode: boolean;
+    collateral_enabled: boolean | null;
   }> = [];
 
   let callIdx = 0;
@@ -235,6 +251,11 @@ export async function getAavePositions(
       !supplyFailed && !varDebtFailed && !stableDebtFailed
     ) continue;
 
+    // Decode per-reserve collateral flag from user configuration bitmap
+    const collateralEnabled = userConfigBitmap !== null
+      ? (userConfigBitmap >> BigInt(reserve.id * 2 + 1) & 1n) === 1n
+      : null;
+
     positions.push({
       symbol: reserve.symbol,
       underlying: reserve.underlying,
@@ -250,7 +271,8 @@ export async function getAavePositions(
       stable_debt: formatUnits(stableDebtRaw, reserve.decimals),
       total_debt_raw: totalDebtRaw.toString(),
       total_debt: formatUnits(totalDebtRaw, reserve.decimals),
-      isolation_mode: reserve.isolationMode
+      isolation_mode: reserve.isolationMode,
+      collateral_enabled: collateralEnabled
     });
   }
 

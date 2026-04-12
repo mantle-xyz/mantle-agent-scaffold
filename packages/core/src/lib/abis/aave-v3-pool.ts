@@ -57,12 +57,33 @@ export const AAVE_V3_POOL_ABI = [
     outputs: [{ name: "", type: "uint256" }]
   },
 
+  // ---- Collateral toggle ----
+  {
+    type: "function",
+    name: "setUserUseReserveAsCollateral",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "useAsCollateral", type: "bool" }
+    ],
+    outputs: []
+  },
+
   // ---- Configuration (packed bitmap) ----
   {
     type: "function",
     name: "getConfiguration",
     stateMutability: "view",
     inputs: [{ name: "asset", type: "address" }],
+    outputs: [{ name: "configuration", type: "uint256" }]
+  },
+
+  // ---- User configuration (per-reserve collateral/borrow bitmap) ----
+  {
+    type: "function",
+    name: "getUserConfiguration",
+    stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
     outputs: [{ name: "configuration", type: "uint256" }]
   },
 
