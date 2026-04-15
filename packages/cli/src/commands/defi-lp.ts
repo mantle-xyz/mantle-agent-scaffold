@@ -131,7 +131,7 @@ export function registerLp(parent: Command): void {
     .option("--liquidity <amount>", "exact amount of liquidity to remove. For agni/fluxion")
     .option(
       "--percentage <pct>",
-      "percentage of position to remove (1-100). For agni/fluxion. Reads liquidity on-chain.",
+      "percentage of position to remove (1-100). Works for both V3 (agni/fluxion) and Merchant Moe. Reads LP balances on-chain.",
       (v: string) => parseNumberOption(v, "--percentage")
     )
     .option("--token-a <token>", "first token symbol or address. For merchant_moe")
@@ -141,8 +141,9 @@ export function registerLp(parent: Command): void {
       "LB bin step. For merchant_moe",
       (v: string) => parseIntegerOption(v, "--bin-step")
     )
-    .option("--ids <json>", "bin IDs to remove from as JSON array. For merchant_moe")
-    .option("--amounts <json>", "amounts per bin as JSON array. For merchant_moe")
+    .option("--ids <json>", "bin IDs to remove from as JSON array. For merchant_moe. Optional with --percentage.")
+    .option("--amounts <json>", "LP token balances (balance_raw) per bin as JSON array of strings. For merchant_moe. Use --percentage instead for automatic mode.")
+    .option("--owner <address>", "wallet address that holds the LP tokens (the signer). For merchant_moe percentage mode when signer differs from recipient.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const provider = String(opts.provider).toLowerCase();
@@ -174,9 +175,28 @@ export function registerLp(parent: Command): void {
         }
       }
 
+      // Merchant Moe requires token_a, token_b, and either --percentage or --ids+--amounts
+      if (provider === "merchant_moe") {
+        if (!opts.tokenA || !opts.tokenB) {
+          throw new Error("--token-a and --token-b are required for merchant_moe.");
+        }
+        if (opts.percentage == null && !opts.ids && !opts.amounts) {
+          throw new Error(
+            "--percentage or --ids+--amounts is required for merchant_moe. " +
+            "Recommended: use --percentage 100 to remove all LP (auto-reads balances on-chain)."
+          );
+        }
+        if (opts.percentage != null && opts.amounts) {
+          throw new Error(
+            "--percentage and --amounts are mutually exclusive. Use one or the other."
+          );
+        }
+      }
+
       const result = await allTools["mantle_buildRemoveLiquidity"].handler({
         provider: opts.provider,
         recipient: opts.recipient,
+        owner: opts.owner,
         token_id: opts.tokenId,
         liquidity: opts.liquidity,
         percentage: opts.percentage,
@@ -632,6 +652,8 @@ function formatUnsignedTxResult(data: Record<string, unknown>): void {
 
 function truncateHex(hex: string | undefined): string {
   if (!hex) return "null";
+  // Never truncate calldata — agents and users need the full hex to sign transactions.
+  // Previously this sliced the middle out, causing manual-paste errors (e.g. dropped chars).
   if (hex.length <= 66) return hex;
-  return `${hex.slice(0, 34)}...${hex.slice(-16)} (${hex.length} chars)`;
+  return `${hex} (${hex.length} chars)`;
 }

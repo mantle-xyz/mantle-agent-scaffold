@@ -2361,15 +2361,6 @@ export async function buildRemoveLiquidity(
   const tokenA = await resolveToken(d, tokenAInput, network);
   const tokenB = await resolveToken(d, tokenBInput, network);
 
-  if (!Array.isArray(args.ids) || !Array.isArray(args.amounts)) {
-    throw new MantleMcpError(
-      "INVALID_INPUT",
-      "Merchant Moe removeLiquidity requires 'ids' and 'amounts' arrays.",
-      "Provide arrays of bin IDs and corresponding amounts to remove.",
-      { provider }
-    );
-  }
-
   const routerAddress = getContractAddress(
     "merchant_moe",
     "lb_router_v2_2",
@@ -2378,17 +2369,219 @@ export async function buildRemoveLiquidity(
   const binStep =
     typeof args.bin_step === "number" ? args.bin_step : 25;
 
+  const warnings: string[] = [];
+
+  // ── Step 1: Resolve LBPair and read canonical token order ───────────
+  // LB pairs have a fixed tokenX/tokenY ordering. The router reverts with
+  // LBRouter__WrongTokenOrder if the caller passes them in the wrong order.
+  const client = d.getClient(network);
+  const factoryAddr = getContractAddress("merchant_moe", "lb_factory_v2_2", network) as `0x${string}`;
+  const pairInfo = await client.readContract({
+    address: factoryAddr,
+    abi: LB_FACTORY_ABI,
+    functionName: "getLBPairInformation",
+    args: [
+      tokenA.address as `0x${string}`,
+      tokenB.address as `0x${string}`,
+      BigInt(binStep)
+    ]
+  }) as { LBPair: string };
+
+  if (!pairInfo.LBPair || pairInfo.LBPair === "0x0000000000000000000000000000000000000000") {
+    throw new MantleMcpError(
+      "POOL_NOT_FOUND",
+      `No Merchant Moe LB pair found for ${tokenA.symbol}/${tokenB.symbol} with bin step ${binStep}.`,
+      "Use 'mantle-cli lp find-pools --token-a <A> --token-b <B>' to discover available pools and their bin steps.",
+      { token_a: tokenA.symbol, token_b: tokenB.symbol, bin_step: binStep }
+    );
+  }
+
+  const pairAddr = pairInfo.LBPair as `0x${string}`;
+  const pairTokenX = await client.readContract({
+    address: pairAddr,
+    abi: LB_PAIR_ABI,
+    functionName: "getTokenX"
+  }) as `0x${string}`;
+
+  // Sort tokens to match the pair's canonical order (same as addLiquidity)
+  const tokenAIsX = tokenA.address.toLowerCase() === pairTokenX.toLowerCase();
+  const tokenBIsX = tokenB.address.toLowerCase() === pairTokenX.toLowerCase();
+  if (!tokenAIsX && !tokenBIsX) {
+    throw new MantleMcpError(
+      "TOKEN_MISMATCH",
+      `LB pair tokenX (${pairTokenX}) matches neither ${tokenA.symbol} (${tokenA.address}) nor ${tokenB.symbol} (${tokenB.address}).`,
+      "Re-check token addresses and bin step.",
+      { pair: pairAddr, pairTokenX, tokenA: tokenA.address, tokenB: tokenB.address }
+    );
+  }
+  const [tokenX, tokenY] = tokenAIsX
+    ? [tokenA, tokenB]
+    : [tokenB, tokenA];
+
+  // ── Step 2: Determine bin IDs and amounts ───────────────────────────
+  let ids: bigint[];
+  let amounts: bigint[];
+
+  // Percentage mode: read on-chain LP balances and compute amounts automatically
+  if (args.percentage != null) {
+    const pct =
+      typeof args.percentage === "number"
+        ? args.percentage
+        : typeof args.percentage === "string"
+          ? Number(args.percentage)
+          : NaN;
+
+    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "percentage must be between 0 (exclusive) and 100 (inclusive).",
+        "Provide percentage as a number 1-100 (e.g. 50 for half, 100 for full removal).",
+        { percentage: args.percentage }
+      );
+    }
+
+    // Guard against sub-0.005% which rounds the multiplier to 0
+    if (pct < 100 && Math.round(pct * 100) === 0) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        `percentage ${pct} is too small — rounds to 0 effective removal. Minimum effective percentage is ~0.01.`,
+        "Use a percentage >= 0.01, or use explicit ids+amounts for sub-basis-point precision.",
+        { percentage: pct }
+      );
+    }
+
+    // If bin IDs are explicitly provided, use those; otherwise scan ±25 around active bin
+    let binIdsToCheck: number[];
+    if (Array.isArray(args.ids) && args.ids.length > 0) {
+      binIdsToCheck = (args.ids as (number | string)[]).map(Number);
+    } else {
+      // Auto-scan: get active bin and check ±25 range for user balances
+      const activeId = await client.readContract({
+        address: pairAddr,
+        abi: LB_PAIR_ABI,
+        functionName: "getActiveId"
+      }) as number;
+      const BIN_SCAN_RADIUS = 25;
+      binIdsToCheck = [];
+      for (let offset = -BIN_SCAN_RADIUS; offset <= BIN_SCAN_RADIUS; offset++) {
+        const binId = Number(activeId) + offset;
+        if (binId >= 0) binIdsToCheck.push(binId);
+      }
+    }
+
+    // Read user LP balances for all candidate bins via multicall
+    // Use owner (the LP token holder / signer) if provided; fall back to recipient.
+    // The LP tokens are held by the signer, not the recipient — these may differ.
+    const lpHolder = args.owner
+      ? requireAddress(args.owner, "owner")
+      : recipient;
+    const balanceCalls = binIdsToCheck.map((id) => ({
+      address: pairAddr,
+      abi: LB_PAIR_ABI,
+      functionName: "balanceOf" as const,
+      args: [lpHolder, BigInt(id)]
+    }));
+    const balanceResults = await client.multicall({ contracts: balanceCalls });
+
+    ids = [];
+    amounts = [];
+    for (let i = 0; i < binIdsToCheck.length; i++) {
+      const result = balanceResults[i];
+      if (result.status !== "success") continue;
+      const balance = result.result as bigint;
+      if (balance === 0n) continue;
+
+      const amountToRemove = pct === 100
+        ? balance
+        : (() => {
+            const multiplier = BigInt(Math.round(pct * 100));
+            if (multiplier === 0n) return 0n; // guarded below after loop
+            return (balance * multiplier) / 10000n;
+          })();
+      if (amountToRemove === 0n) continue;
+
+      ids.push(BigInt(binIdsToCheck[i]));
+      amounts.push(amountToRemove);
+    }
+
+    if (ids.length === 0) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "No LP token balance found in any scanned bins for this recipient.",
+        "Verify the owner address has LP positions in this pair. Use mantle_getLBPositions to check.",
+        { pair: pairAddr, lp_holder: lpHolder, recipient, bin_step: binStep }
+      );
+    }
+
+    const scanNote = !(Array.isArray(args.ids) && args.ids.length > 0)
+      ? ` Auto-scanned ±25 bins around active price; if you have positions in distant bins, supply explicit ids or use mantle_getLBPositions to locate all bins first.`
+      : "";
+    warnings.push(
+      `Percentage mode: removing ${pct}% from ${ids.length} bins (LP token balances read on-chain at tx build time).${scanNote}`
+    );
+  } else {
+    // Explicit ids + amounts mode
+    if (!Array.isArray(args.ids) || !Array.isArray(args.amounts)) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "Merchant Moe removeLiquidity requires either 'percentage' or both 'ids' and 'amounts' arrays.",
+        "Option A (recommended): provide percentage=100 to remove all liquidity. " +
+          "Option B: provide ids (bin IDs) and amounts (LP token balances from balance_raw in mantle_getLBPositions output — NOT user_amount_x_raw or user_amount_y_raw).",
+        { provider }
+      );
+    }
+
+    if (args.ids.length !== args.amounts.length) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        `ids array length (${args.ids.length}) does not match amounts array length (${args.amounts.length}).`,
+        "Provide one amount per bin ID. Each amount must be the LP token balance (balance_raw) for that bin.",
+        { ids_len: args.ids.length, amounts_len: args.amounts.length }
+      );
+    }
+
+    ids = (args.ids as (number | string)[]).map((v, i) => {
+      if (typeof v === "number" && !Number.isInteger(v)) {
+        throw new MantleMcpError(
+          "INVALID_INPUT",
+          `ids[${i}] must be an integer, got ${v}.`,
+          "Bin IDs must be whole numbers.",
+          { index: i, value: v }
+        );
+      }
+      return BigInt(v);
+    });
+    // Parse amounts carefully: accept both strings and numbers, always via BigInt
+    // to avoid JS number precision loss for large LP balances (>2^53).
+    amounts = (args.amounts as (string | number)[]).map((v, i) => {
+      if (typeof v === "number" && !Number.isInteger(v)) {
+        throw new MantleMcpError(
+          "INVALID_INPUT",
+          `amounts[${i}] must be an integer, got ${v}.`,
+          "Use balance_raw (integer) values from mantle_getLBPositions.",
+          { index: i, value: v }
+        );
+      }
+      return BigInt(v);
+    });
+  }
+
+  // ── Step 3: Build calldata ──────────────────────────────────────────
+  warnings.push(
+    "amountXMin and amountYMin are 0 — no slippage protection. Consider using a short deadline to limit MEV exposure."
+  );
+
   const data = encodeFunctionData({
     abi: LB_ROUTER_ABI,
     functionName: "removeLiquidity",
     args: [
-      tokenA.address as `0x${string}`,
-      tokenB.address as `0x${string}`,
+      tokenX.address as `0x${string}`,
+      tokenY.address as `0x${string}`,
       binStep,
       0n, // amountXMin
       0n, // amountYMin
-      (args.ids as number[]).map(BigInt),
-      (args.amounts as string[]).map(BigInt),
+      ids,
+      amounts,
       recipient as `0x${string}`,
       deadline
     ]
@@ -2396,20 +2589,19 @@ export async function buildRemoveLiquidity(
 
   return {
     intent: "remove_liquidity",
-    human_summary: `Remove liquidity on Merchant Moe LB: ${tokenA.symbol}/${tokenB.symbol} (${(args.ids as number[]).length} bins)`,
+    human_summary: `Remove liquidity on Merchant Moe LB: ${tokenX.symbol}/${tokenY.symbol} (${ids.length} bins, pair: ${pairAddr.slice(0, 10)}...)`,
     unsigned_tx: {
       to: routerAddress,
       data,
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [
-      "amountXMin and amountYMin are 0. Consider setting minimum outputs to avoid MEV."
-    ],
+    warnings,
     pool_params: {
       provider: "merchant_moe",
       bin_step: binStep,
-      router_address: routerAddress
+      router_address: routerAddress,
+      pool_address: pairAddr
     },
     built_at_utc: d.now()
   };
@@ -3610,7 +3802,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildRemoveLiquidity: {
     name: "mantle_buildRemoveLiquidity",
     description:
-      "Build an unsigned remove-liquidity transaction. For V3 DEXes uses decreaseLiquidity+collect via multicall. For Merchant Moe LB removes from specified bins.\n\nV3 amount modes:\n- Exact liquidity: provide 'liquidity' as a raw amount\n- Percentage: provide 'percentage' (1-100) to remove a portion of the position (reads current liquidity on-chain)\n\nExamples:\n- Remove 50% of V3 position: provider='agni', token_id='12345', percentage=50, recipient='0x...'\n- Remove all V3 position: provider='agni', token_id='12345', percentage=100, recipient='0x...'\n- Remove exact liquidity: provider='agni', token_id='12345', liquidity='1000000', recipient='0x...'\n- Remove LB bins on Merchant Moe: provider='merchant_moe', token_a='WMNT', token_b='USDC', ids=[8388608], amounts=['1000000'], recipient='0x...'",
+      "Build an unsigned remove-liquidity transaction. For V3 DEXes uses decreaseLiquidity+collect via multicall. For Merchant Moe LB removes from specified bins.\n\nV3 amount modes:\n- Exact liquidity: provide 'liquidity' as a raw amount\n- Percentage: provide 'percentage' (1-100) to remove a portion of the position (reads current liquidity on-chain)\n\nMerchant Moe amount modes:\n- Percentage (RECOMMENDED): provide 'percentage' (1-100) to auto-read LP balances on-chain and remove proportionally. Optionally provide 'ids' to target specific bins; if omitted, scans ±25 bins around active price.\n- Explicit: provide 'ids' (bin IDs) and 'amounts' (LP token balances to burn). CRITICAL: 'amounts' must be 'balance_raw' values from mantle_getLBPositions output — NOT 'user_amount_x_raw' or 'user_amount_y_raw'. LP token balances are typically 1e18-scale numbers.\n\nExamples:\n- Remove 50% of V3 position: provider='agni', token_id='12345', percentage=50, recipient='0x...'\n- Remove all V3 position: provider='agni', token_id='12345', percentage=100, recipient='0x...'\n- Remove exact liquidity: provider='agni', token_id='12345', liquidity='1000000', recipient='0x...'\n- Remove all Merchant Moe LP (recommended): provider='merchant_moe', token_a='WMNT', token_b='USDC', bin_step=25, percentage=100, recipient='0x...'\n- Remove 50% of Merchant Moe LP: provider='merchant_moe', token_a='WMNT', token_b='USDC', bin_step=25, percentage=50, recipient='0x...'\n- Remove specific LB bins: provider='merchant_moe', token_a='WMNT', token_b='USDC', bin_step=25, ids=[8388608], amounts=['500000000000000000'], recipient='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -3633,17 +3825,18 @@ export const defiWriteTools: Record<string, Tool> = {
         percentage: {
           type: "number",
           description:
-            "Percentage of position liquidity to remove (1-100). For agni/fluxion. " +
-            "Reads current liquidity on-chain and calculates the amount. " +
+            "Percentage of position liquidity to remove (1-100). Works for BOTH V3 (agni/fluxion) and Merchant Moe. " +
+            "Reads current LP balances on-chain and calculates the amount. " +
+            "RECOMMENDED for Merchant Moe — avoids the need to manually query balance_raw values. " +
             "Example: 50 removes half, 100 removes all."
         },
         token_a: {
           type: "string",
-          description: "First token symbol or address. For merchant_moe."
+          description: "First token symbol or address. For merchant_moe. Token order does not matter — canonical order is resolved on-chain."
         },
         token_b: {
           type: "string",
-          description: "Second token symbol or address. For merchant_moe."
+          description: "Second token symbol or address. For merchant_moe. Token order does not matter — canonical order is resolved on-chain."
         },
         bin_step: {
           type: "number",
@@ -3651,11 +3844,15 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         ids: {
           type: "array",
-          description: "Bin IDs to remove from. For merchant_moe."
+          description: "Bin IDs to remove from. For merchant_moe. Optional when using percentage mode (auto-scans ±25 bins if omitted)."
         },
         amounts: {
           type: "array",
-          description: "Amounts per bin to remove. For merchant_moe."
+          description: "LP token balances to burn per bin. For merchant_moe. MUST be 'balance_raw' values from mantle_getLBPositions — these are ERC-1155 LP share token counts (typically 1e18-scale). Do NOT pass 'user_amount_x_raw' or 'user_amount_y_raw' (those are underlying token estimates, not LP shares). Prefer using 'percentage' mode instead."
+        },
+        owner: {
+          type: "string",
+          description: "Wallet address that holds the LP tokens (the signer). For merchant_moe percentage mode: used to query on-chain LP balances. If omitted, defaults to recipient. Provide this when recipient differs from the signer."
         },
         network: {
           type: "string",

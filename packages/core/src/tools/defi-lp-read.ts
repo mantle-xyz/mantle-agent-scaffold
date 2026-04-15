@@ -2655,6 +2655,10 @@ export const defiLpReadTools: Record<string, Tool> = {
       "known pairs in the registry.\n\n" +
       "Returns per-pair breakdown with bin IDs, user share percentage, and " +
       "estimated token amounts (tokenX/tokenY) based on pro-rata share of bin reserves.\n\n" +
+      "FIELD USAGE for LP removal:\n" +
+      "- balance_raw: the ERC-1155 LP share token count from balanceOf(). USE THIS as 'amounts' in mantle_buildRemoveLiquidity.\n" +
+      "- user_amount_x_raw / user_amount_y_raw: estimated underlying token amounts (pro-rata of reserves). For DISPLAY/VALUATION only — do NOT pass these as 'amounts' to removeLiquidity.\n" +
+      "- RECOMMENDED: use percentage mode in mantle_buildRemoveLiquidity instead of manually extracting balance_raw values.\n\n" +
       "Use this tool for:\n" +
       "- Approximate portfolio valuation of Merchant Moe LB LP positions\n" +
       "- Understanding near-price liquidity distribution\n" +
