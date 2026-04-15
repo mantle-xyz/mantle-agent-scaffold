@@ -1592,6 +1592,8 @@ export async function buildAddLiquidity(
   // For V3: pre-compute tick_lower/tick_upper from range_preset when not explicitly provided
   let resolvedTickLower: number | null = null;
   let resolvedTickUpper: number | null = null;
+  // Cache the pool address resolved during range_preset to avoid a duplicate getPool call in USD mode (OPT-M-12).
+  let resolvedPoolAddress: string | undefined;
   if ((provider === "agni" || provider === "fluxion") && rangePresetPct != null
       && typeof args.tick_lower !== "number" && typeof args.tick_upper !== "number") {
     const usedFeeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
@@ -1613,6 +1615,9 @@ export async function buildAddLiquidity(
       );
     }
 
+    // Cache for reuse in USD mode (avoids duplicate RPC call)
+    resolvedPoolAddress = poolAddr;
+
     const [slot0Raw, tickSpacingRaw] = await Promise.all([
       client.readContract({
         address: poolAddr,
@@ -1630,10 +1635,23 @@ export async function buildAddLiquidity(
     const tickSpacing = Number(tickSpacingRaw);
 
     const tickOffsetUp = Math.floor(Math.log(1 + rangePresetPct / 100) / Math.log(1.0001));
-    const tickOffsetDown = Math.floor(Math.log(1 - rangePresetPct / 100) / Math.log(1.0001));
+    // Use Math.ceil for the downward offset (negative value) so the lower bound
+    // is rounded toward zero, keeping the range within the stated ±X% preset.
+    const tickOffsetDown = Math.ceil(Math.log(1 - rangePresetPct / 100) / Math.log(1.0001));
 
     resolvedTickLower = Math.floor((currentTick + tickOffsetDown) / tickSpacing) * tickSpacing;
     resolvedTickUpper = Math.ceil((currentTick + tickOffsetUp) / tickSpacing) * tickSpacing;
+
+    // Clamp to V3 valid tick range (OPT-M-11)
+    const MIN_TICK = -887272;
+    const MAX_TICK = 887272;
+    resolvedTickLower = Math.max(MIN_TICK, resolvedTickLower);
+    resolvedTickUpper = Math.min(MAX_TICK, resolvedTickUpper);
+    if (resolvedTickLower >= resolvedTickUpper) {
+      warnings.push("range_preset produced invalid tick range after clamping; falling back to full range.");
+      resolvedTickLower = -887220;
+      resolvedTickUpper = 887220;
+    }
 
     warnings.push(
       `range_preset '${rangePreset}' (±${rangePresetPct}%): computed tick range [${resolvedTickLower}, ${resolvedTickUpper}] ` +
@@ -1711,13 +1729,15 @@ export async function buildAddLiquidity(
               : [tokenB, tokenA, priceB, priceA];
 
           const feeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
-          const factoryAddress = getContractAddress(provider, "factory", network);
-          const poolAddr = await client.readContract({
-            address: factoryAddress as `0x${string}`,
-            abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
-            functionName: "getPool",
-            args: [t0.address as `0x${string}`, t1.address as `0x${string}`, feeTier]
-          }) as `0x${string}`;
+          // Reuse pool address from range_preset resolution if available (avoids duplicate getPool RPC call)
+          const poolAddr: `0x${string}` = resolvedPoolAddress
+            ? resolvedPoolAddress as `0x${string}`
+            : await client.readContract({
+                address: getContractAddress(provider, "factory", network) as `0x${string}`,
+                abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
+                functionName: "getPool",
+                args: [t0.address as `0x${string}`, t1.address as `0x${string}`, feeTier]
+              }) as `0x${string}`;
 
           if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
             const slot0 = await client.readContract({
@@ -1924,9 +1944,18 @@ export async function buildAddLiquidity(
   let computedDeltaIds: number[] | null = null;
   if (rangePresetPct != null && !Array.isArray(args.delta_ids)) {
     const binPriceRatio = 1 + binStep / 10000;
-    const halfSpread = Math.max(1, Math.ceil(Math.log(1 + rangePresetPct / 100) / Math.log(binPriceRatio)));
+    const MAX_HALF_SPREAD = 50; // Cap to avoid enormous arrays for low-binStep pools
+    const rawHalfSpread = Math.max(1, Math.ceil(Math.log(1 + rangePresetPct / 100) / Math.log(binPriceRatio)));
+    const halfSpread = Math.min(rawHalfSpread, MAX_HALF_SPREAD);
     computedDeltaIds = [];
     for (let i = -halfSpread; i <= halfSpread; i++) computedDeltaIds.push(i);
+    if (rawHalfSpread > MAX_HALF_SPREAD) {
+      warnings.push(
+        `range_preset '${rangePreset}' (±${rangePresetPct}%) would require ${rawHalfSpread * 2 + 1} bins for bin step ${binStep} — ` +
+        `capped to ${MAX_HALF_SPREAD * 2 + 1} bins (±${MAX_HALF_SPREAD}) to stay within gas limits. ` +
+        `For wider ranges on low-binStep pools, provide explicit delta_ids.`
+      );
+    }
     warnings.push(
       `range_preset '${rangePreset}' (±${rangePresetPct}%): computed ${computedDeltaIds.length} bins ` +
       `(delta ${computedDeltaIds[0]} to ${computedDeltaIds[computedDeltaIds.length - 1]}) for bin step ${binStep}.`
@@ -2284,24 +2313,28 @@ async function buildMoeAddLiquidity(params: {
     const numBinsY = deltaIds.filter(d => d <= 0).length; // below + active
 
     // Compute per-bin fractions (must sum to exactly 1e18 = 100%)
-    const fracX = numBinsX > 0 ? Math.floor(1e18 / numBinsX) : 0;
-    const fracY = numBinsY > 0 ? Math.floor(1e18 / numBinsY) : 0;
+    // Use BigInt arithmetic throughout to avoid float64 precision errors for
+    // values > 2^53 (OPT-M-10). Only convert to Number at the end for the
+    // distribution arrays (which expect number[]).
+    const ONE_E18 = 1000000000000000000n;
+    const fracXBig = numBinsX > 0 ? ONE_E18 / BigInt(numBinsX) : 0n;
+    const fracYBig = numBinsY > 0 ? ONE_E18 / BigInt(numBinsY) : 0n;
     // Put rounding remainder in the active bin (delta 0)
-    const remainderX = numBinsX > 0 ? 1e18 - fracX * numBinsX : 0;
-    const remainderY = numBinsY > 0 ? 1e18 - fracY * numBinsY : 0;
+    const remainderXBig = numBinsX > 0 ? ONE_E18 - fracXBig * BigInt(numBinsX) : 0n;
+    const remainderYBig = numBinsY > 0 ? ONE_E18 - fracYBig * BigInt(numBinsY) : 0n;
 
     distributionX = [];
     distributionY = [];
     for (const delta of deltaIds) {
       // tokenX: active bin + bins above active
       if (delta >= 0) {
-        distributionX.push(delta === 0 ? fracX + remainderX : fracX);
+        distributionX.push(Number(delta === 0 ? fracXBig + remainderXBig : fracXBig));
       } else {
         distributionX.push(0);
       }
       // tokenY: bins below active + active bin
       if (delta <= 0) {
-        distributionY.push(delta === 0 ? fracY + remainderY : fracY);
+        distributionY.push(Number(delta === 0 ? fracYBig + remainderYBig : fracYBig));
       } else {
         distributionY.push(0);
       }
@@ -2622,7 +2655,9 @@ export async function buildRemoveLiquidity(
     }
 
     const scanNote = !(Array.isArray(args.ids) && args.ids.length > 0)
-      ? ` Auto-scanned ±25 bins around active price; if you have positions in distant bins, supply explicit ids or use mantle_getLBPositions to locate all bins first.`
+      ? pct === 100
+        ? ` ⚠️ Auto-scanned ±25 bins around active price for percentage=100 (full removal). Positions in distant bins will NOT be removed. Run mantle_getLBPositions first to confirm all bin positions, then supply explicit ids for complete removal.`
+        : ` Auto-scanned ±25 bins around active price; if you have positions in distant bins, supply explicit ids or use mantle_getLBPositions to locate all bins first.`
       : "";
     warnings.push(
       `Percentage mode: removing ${pct}% from ${ids.length} bins (LP token balances read on-chain at tx build time).${scanNote}`
@@ -2674,10 +2709,50 @@ export async function buildRemoveLiquidity(
     });
   }
 
-  // ── Step 3: Build calldata ──────────────────────────────────────────
-  warnings.push(
-    "amountXMin and amountYMin are 0 — no slippage protection. Consider using a short deadline to limit MEV exposure."
-  );
+  // ── Step 3: Compute slippage-protected minimums ─────────────────────
+  const slippageBps =
+    typeof args.slippage_bps === "number" ? args.slippage_bps : 50; // default 0.5%
+
+  // Read bin reserves and total supply for each bin to estimate expected outputs.
+  // Pro-rata share: expectedX += reserveX * amountToRemove / totalSupply (per bin).
+  let amountXMin = 0n;
+  let amountYMin = 0n;
+  try {
+    const reserveCalls = ids.flatMap((binId) => [
+      { address: pairAddr, abi: LB_PAIR_ABI, functionName: "getBin" as const, args: [Number(binId)] },
+      { address: pairAddr, abi: LB_PAIR_ABI, functionName: "totalSupply" as const, args: [binId] }
+    ]);
+    const reserveResults = await client.multicall({ contracts: reserveCalls });
+
+    let expectedX = 0n;
+    let expectedY = 0n;
+    for (let i = 0; i < ids.length; i++) {
+      const binRes = reserveResults[i * 2];
+      const supplyRes = reserveResults[i * 2 + 1];
+      if (binRes.status !== "success" || supplyRes.status !== "success") continue;
+      const [reserveX, reserveY] = binRes.result as [bigint, bigint];
+      const totalSupply = supplyRes.result as bigint;
+      if (totalSupply === 0n) continue;
+      expectedX += (reserveX * amounts[i]) / totalSupply;
+      expectedY += (reserveY * amounts[i]) / totalSupply;
+    }
+
+    // Apply slippage tolerance
+    amountXMin = (expectedX * BigInt(10000 - slippageBps)) / 10000n;
+    amountYMin = (expectedY * BigInt(10000 - slippageBps)) / 10000n;
+    warnings.push(
+      `Slippage protection: amountXMin=${amountXMin.toString()}, amountYMin=${amountYMin.toString()} ` +
+      `(${slippageBps}bps tolerance on estimated reserves).`
+    );
+  } catch {
+    // If reserve reads fail, fall back to zero minimums with a warning
+    warnings.push(
+      "Could not read bin reserves for slippage protection — amountXMin and amountYMin are 0. " +
+      "Consider using a short deadline to limit MEV exposure."
+    );
+  }
+
+  // ── Step 4: Build calldata ──────────────────────────────────────────
 
   const data = encodeFunctionData({
     abi: LB_ROUTER_ABI,
@@ -2686,8 +2761,8 @@ export async function buildRemoveLiquidity(
       tokenX.address as `0x${string}`,
       tokenY.address as `0x${string}`,
       binStep,
-      0n, // amountXMin
-      0n, // amountYMin
+      amountXMin,
+      amountYMin,
       ids,
       amounts,
       recipient as `0x${string}`,
@@ -3557,22 +3632,13 @@ export async function buildCollectFees(
 
   const deadline = d.deadline();
 
-  // Poke the position (decreaseLiquidity with liquidity=0) to settle pending
-  // fees into tokensOwed0/tokensOwed1 before collecting.
-  const pokeData = encodeFunctionData({
-    abi: V3_POSITION_MANAGER_ABI,
-    functionName: "decreaseLiquidity",
-    args: [
-      {
-        tokenId,
-        liquidity: 0n,
-        amount0Min: 0n,
-        amount1Min: 0n,
-        deadline
-      }
-    ]
-  });
-
+  // Collect accrued fees. When the position still has liquidity, prepend a
+  // "poke" (decreaseLiquidity with liquidity=0) to settle any pending fees
+  // into tokensOwed0/tokensOwed1 before collecting. Skip the poke when
+  // liquidity === 0n because the V3 NonfungiblePositionManager reverts
+  // decreaseLiquidity with `require(params.liquidity > 0)` on zero-liquidity
+  // positions (fees are already settled into tokensOwed when liquidity was
+  // fully removed).
   const collectData = encodeFunctionData({
     abi: V3_POSITION_MANAGER_ABI,
     functionName: "collect",
@@ -3586,10 +3652,29 @@ export async function buildCollectFees(
     ]
   });
 
+  const multicallOps: `0x${string}`[] = [];
+  if (liquidity > 0n) {
+    const pokeData = encodeFunctionData({
+      abi: V3_POSITION_MANAGER_ABI,
+      functionName: "decreaseLiquidity",
+      args: [
+        {
+          tokenId,
+          liquidity: 0n,
+          amount0Min: 0n,
+          amount1Min: 0n,
+          deadline
+        }
+      ]
+    });
+    multicallOps.push(pokeData);
+  }
+  multicallOps.push(collectData);
+
   const data = encodeFunctionData({
     abi: V3_POSITION_MANAGER_ABI,
     functionName: "multicall",
-    args: [[pokeData, collectData]]
+    args: [multicallOps]
   });
 
   const providerLabel = provider === "agni" ? "Agni" : "Fluxion";

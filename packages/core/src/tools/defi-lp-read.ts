@@ -128,6 +128,13 @@ function priceFromSqrtX96(
   decimals0: number,
   decimals1: number
 ): { price_token0_per_token1: number; price_token1_per_token0: number } {
+  if (sqrtPriceX96 === 0n) {
+    throw new MantleMcpError(
+      "POOL_UNINITIALIZED",
+      "Pool sqrtPriceX96 is 0 — pool is not initialized.",
+      "Use a different pool or wait for it to be initialized."
+    );
+  }
   const sqrtPrice = Number(sqrtPriceX96) / 2 ** 96;
   const rawPrice = sqrtPrice * sqrtPrice; // token1 per token0 in raw terms
   const decimalAdjustment = 10 ** (decimals0 - decimals1);
@@ -1619,41 +1626,61 @@ async function findPools(
         }
       }
 
-      // Enrich pools with market data
-      for (const pool of pools) {
+      // Enrich pools with market data (only pools with liquidity were sent to DexScreener)
+      const SANITY_LIMIT_USD = 10_000_000_000; // $10 B — flag implausible values
+      const outlierPools: string[] = [];
+      for (const pool of poolsWithLiquidity) {
         const pair = dexScreenerMap.get(pool.pool_address.toLowerCase());
         if (pair) {
           const tvl = asFiniteNumber(pair.liquidity?.usd);
           const vol = asFiniteNumber(pair.volume?.h24);
-          pool.tvl_usd = tvl;
-          pool.volume_24h_usd = vol;
 
-          // Compute fee APR if we have TVL and volume
-          if (tvl != null && tvl > 0 && vol != null) {
+          // Sanity-check: skip implausibly large values (OPT-M-5)
+          const tvlOk = tvl == null || tvl <= SANITY_LIMIT_USD;
+          const volOk = vol == null || vol <= SANITY_LIMIT_USD;
+          if (!tvlOk || !volOk) {
+            outlierPools.push(pool.pool_address);
+          }
+          pool.tvl_usd = tvlOk ? tvl : null;
+          pool.volume_24h_usd = volOk ? vol : null;
+
+          // Compute fee APR if we have TVL and volume (use sanitized values)
+          const safeTvl = pool.tvl_usd;
+          const safeVol = pool.volume_24h_usd;
+          if (safeTvl != null && safeTvl > 0 && safeVol != null) {
             let feeRate: number;
             if (pool.fee_tier != null) {
               feeRate = pool.fee_tier / 1_000_000; // V3: 3000 → 0.003
             } else if (pool.bin_step != null) {
-              // LB: base fee ≈ binStep × 0.001 (simplified, actual depends on volatility)
-              feeRate = pool.bin_step * 0.001;
+              // LB: base fee ≈ binStep / 10_000 (binStep is in bps; e.g. 25 → 0.25%)
+              feeRate = pool.bin_step / 10_000;
             } else {
               feeRate = 0.003; // fallback
             }
-            pool.fee_apr_pct = Math.round((vol * feeRate * 365) / tvl * 100) / 100;
+            pool.fee_apr_pct = Math.round((safeVol * feeRate * 365) / safeTvl * 100) / 100;
           }
         }
+      }
+      if (outlierPools.length > 0) {
+        dexScreenerWarning = (dexScreenerWarning ? dexScreenerWarning + " " : "") +
+          `${outlierPools.length} pool(s) had implausibly large TVL or 24h volume (> $10 B) and were excluded from scoring: ${outlierPools.join(", ")}.`;
       }
     }
   }
 
-  // Sort: pools with liquidity first, then by composite score (TVL + volume)
+  // Sort: pools with liquidity first, then by composite score (normalized TVL × 0.6 + normalized volume × 0.4)
+  // Normalize both metrics to [0, 1] within the pool set so the 0.6/0.4 weights have their intended effect.
+  const allTvls = pools.map((p) => p.tvl_usd ?? 0);
+  const allVols = pools.map((p) => p.volume_24h_usd ?? 0);
+  const maxTvl = Math.max(...allTvls, 1); // avoid divide-by-zero
+  const maxVol = Math.max(...allVols, 1);
+
   pools.sort((a, b) => {
     if (a.has_liquidity && !b.has_liquidity) return -1;
     if (!a.has_liquidity && b.has_liquidity) return 1;
-    // Among pools with liquidity, sort by composite score:
-    // normalize TVL (weight 0.6) + volume (weight 0.4)
-    const scoreA = (a.tvl_usd ?? 0) * 0.6 + (a.volume_24h_usd ?? 0) * 0.4;
-    const scoreB = (b.tvl_usd ?? 0) * 0.6 + (b.volume_24h_usd ?? 0) * 0.4;
+    // Among pools with liquidity, sort by normalized composite score:
+    const scoreA = ((a.tvl_usd ?? 0) / maxTvl) * 0.6 + ((a.volume_24h_usd ?? 0) / maxVol) * 0.4;
+    const scoreB = ((b.tvl_usd ?? 0) / maxTvl) * 0.6 + ((b.volume_24h_usd ?? 0) / maxVol) * 0.4;
     if (scoreA !== scoreB) return scoreB - scoreA;
     return a.provider.localeCompare(b.provider);
   });
@@ -1670,8 +1697,10 @@ async function findPools(
     reason: string;
   } | null = null;
 
+  // Pick recommended pool: highest composite score among pools with liquidity AND positive TVL.
+  // Pools with zero TVL but non-zero volume are excluded (potential wash trading).
   const poolsWithMarketData = pools.filter(
-    (p) => p.has_liquidity && (p.tvl_usd != null || p.volume_24h_usd != null)
+    (p) => p.has_liquidity && p.tvl_usd != null && p.tvl_usd > 0
   );
   if (poolsWithMarketData.length > 0) {
     const best = poolsWithMarketData[0]; // already sorted by composite score
@@ -1905,8 +1934,14 @@ async function discoverTopPools(
   const tokenPairResults = await Promise.allSettled(tokenPairPromises);
 
   for (const result of tokenPairResults) {
-    if (result.status !== "fulfilled" || result.value.length === 0) {
+    if (result.status !== "fulfilled") {
+      // Only count network/HTTP errors as failures; an empty array is a valid response
+      // (the token simply has no pools on DexScreener).
       seedQueriesFailed++;
+      continue;
+    }
+    if (result.value.length === 0) {
+      // Valid response — just no pools for this seed token; don't increment failure counter.
       continue;
     }
     seedQueriesSucceeded++;
@@ -1924,7 +1959,7 @@ async function discoverTopPools(
 
   if (seedQueriesFailed > 0) {
     warnings.push(
-      `${seedQueriesFailed}/${DISCOVERY_TOKENS.length} DexScreener seed-token queries failed or returned empty. ` +
+      `${seedQueriesFailed}/${DISCOVERY_TOKENS.length} DexScreener seed-token queries failed (network/HTTP error). ` +
       `Some pools may be missing from results.`
     );
   }
