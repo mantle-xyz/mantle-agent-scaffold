@@ -160,16 +160,31 @@ async function fetchDefiLlamaTokenPrices(
 
 function findTokenInCanonical(
   snapshot: TokenListSnapshot,
-  symbol: string,
+  quickRef: { symbol: string; address: string },
   chainId: number
-): { address: string; decimals: number } | null {
-  const match = snapshot.tokens.find(
-    (token) => token.chainId === chainId && token.symbol.toLowerCase() === symbol.toLowerCase()
+): { address: string; decimals: number; symbol: string } | null {
+  // Match primarily by (chainId, address). Address is the authoritative
+  // on-chain identity — the canonical list sometimes uses namespaced symbols
+  // (e.g. "USDT (BRIDGED)" vs our quick-ref "USDT"), so symbol-only match
+  // would produce false TOKEN_REGISTRY_MISMATCH for correctly-addressed
+  // tokens.
+  const byAddress = snapshot.tokens.find(
+    (token) => token.chainId === chainId && token.address.toLowerCase() === quickRef.address.toLowerCase()
   );
-  if (!match) {
-    return null;
+  if (byAddress) {
+    return { address: byAddress.address, decimals: byAddress.decimals, symbol: byAddress.symbol };
   }
-  return { address: match.address, decimals: match.decimals };
+
+  // Fallback: symbol match. Produces a TOKEN_REGISTRY_MISMATCH downstream if
+  // the canonical address at that symbol differs from the quick-ref address.
+  const bySymbol = snapshot.tokens.find(
+    (token) => token.chainId === chainId && token.symbol.toLowerCase() === quickRef.symbol.toLowerCase()
+  );
+  if (bySymbol) {
+    return { address: bySymbol.address, decimals: bySymbol.decimals, symbol: bySymbol.symbol };
+  }
+
+  return null;
 }
 
 export async function getTokenInfo(
@@ -427,7 +442,7 @@ export async function resolveToken(
       const snapshot = await resolvedDeps.fetchTokenListSnapshot();
       tokenListChecked = true;
       tokenListVersion = snapshot.version;
-      const canonical = findTokenInCanonical(snapshot, quickRef.symbol, CHAIN_CONFIGS[network].chain_id);
+      const canonical = findTokenInCanonical(snapshot, quickRef, CHAIN_CONFIGS[network].chain_id);
 
       if (!canonical) {
         tokenListMatch = false;

@@ -13,7 +13,7 @@ export interface TokenListSnapshot {
   tokens: TokenListEntry[];
 }
 
-const DEFAULT_TOKEN_LIST_URL = "https://token-list.mantle.xyz";
+const DEFAULT_TOKEN_LIST_URL = "https://token-list.mantle.xyz/mantle.tokenlist.json";
 const DEFAULT_TTL_SECONDS = 300;
 
 let cached: { expiresAt: number; snapshot: TokenListSnapshot } | null = null;
