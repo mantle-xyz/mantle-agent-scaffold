@@ -1345,33 +1345,88 @@ async function findPools(
 
     const moeResults = await client.multicall({ contracts: moeCalls });
 
+    // Collect live LB pairs from factory results
+    interface LBPairHit {
+      binStep: number;
+      pairAddress: `0x${string}`;
+    }
+    const lbPairs: LBPairHit[] = [];
     for (let i = 0; i < LB_BIN_STEPS.length; i++) {
       const result = moeResults[i];
       if (result.status === "success" && result.result) {
         const info = result.result as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
         if (info.LBPair && info.LBPair !== ZERO_ADDR) {
-          // Read active bin to confirm the pair is live
-          let hasLiquidity = false;
-          try {
-            const activeId = await client.readContract({
-              address: info.LBPair as `0x${string}`,
-              abi: LB_PAIR_ABI,
-              functionName: "getActiveId"
-            });
-            hasLiquidity = typeof activeId === "number" && activeId > 0;
-          } catch {
-            hasLiquidity = false;
-          }
-
-          pools.push({
-            provider: "merchant_moe",
-            pool_address: info.LBPair,
-            bin_step: LB_BIN_STEPS[i],
-            liquidity_raw: "0", // LB pairs don't have a single liquidity number
-            has_liquidity: hasLiquidity
+          lbPairs.push({
+            binStep: LB_BIN_STEPS[i],
+            pairAddress: info.LBPair as `0x${string}`
           });
         }
       }
+    }
+
+    // Batch-read active bin IDs
+    const activeIdResults = lbPairs.length > 0
+      ? await client.multicall({
+          contracts: lbPairs.map((p) => ({
+            address: p.pairAddress,
+            abi: LB_PAIR_ABI,
+            functionName: "getActiveId" as const
+          }))
+        })
+      : [];
+
+    // For pairs with a valid activeId, batch-read active bin reserves.
+    // The active bin's (reserveX + reserveY) is the closest analogue to
+    // V3's in-range liquidity() — both describe the liquidity available at
+    // the current price. Units are mixed (native decimals of tokenX/Y),
+    // but that's already true of V3's virtual `liquidity` value, so this
+    // yields a comparable rough indicator for ranking/filtering.
+    const binCallIndex: Array<{ pairIdx: number; activeId: number }> = [];
+    const binCalls: Array<{
+      address: `0x${string}`;
+      abi: typeof LB_PAIR_ABI;
+      functionName: "getBin";
+      args: readonly [number];
+    }> = [];
+    for (let i = 0; i < lbPairs.length; i++) {
+      const r = activeIdResults[i];
+      if (r && r.status === "success" && typeof r.result === "number" && r.result > 0) {
+        binCallIndex.push({ pairIdx: i, activeId: r.result });
+        binCalls.push({
+          address: lbPairs[i].pairAddress,
+          abi: LB_PAIR_ABI,
+          functionName: "getBin",
+          args: [r.result] as const
+        });
+      }
+    }
+
+    const binResults = binCalls.length > 0
+      ? await client.multicall({ contracts: binCalls })
+      : [];
+
+    // Map active-bin reserves back to each pair (default: zero = dead)
+    const liquidityByPair = new Map<number, bigint>();
+    for (let k = 0; k < binCallIndex.length; k++) {
+      const r = binResults[k];
+      if (r && r.status === "success" && r.result) {
+        const [binReserveX, binReserveY] = r.result as readonly [bigint, bigint];
+        liquidityByPair.set(
+          binCallIndex[k].pairIdx,
+          BigInt(binReserveX) + BigInt(binReserveY)
+        );
+      }
+    }
+
+    for (let i = 0; i < lbPairs.length; i++) {
+      const liquidity = liquidityByPair.get(i) ?? 0n;
+      pools.push({
+        provider: "merchant_moe",
+        pool_address: lbPairs[i].pairAddress,
+        bin_step: lbPairs[i].binStep,
+        liquidity_raw: liquidity.toString(),
+        has_liquidity: liquidity > 0n
+      });
     }
   }
 
