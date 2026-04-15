@@ -18,7 +18,7 @@ import {
 
 import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
-import { ERC20_ABI } from "../lib/erc20.js";
+import { ERC20_ABI } from "../lib/abis/erc20.js";
 import { normalizeNetwork } from "../lib/network.js";
 import {
   resolveTokenInput as resolveTokenInputFromRegistry,
@@ -250,8 +250,7 @@ async function resolveToken(
       `MNT is the native gas token and has no ERC-20 contract address. ` +
         `It cannot be used directly in swaps, approvals, or DeFi operations.`,
       "Wrap MNT to WMNT first: mantle-cli swap wrap-mnt --amount <n> --json. " +
-        "Then use WMNT for swaps, LP, and Aave. " +
-        "To transfer native MNT, use: mantle-cli transfer send-native --to <addr> --amount <n> --json.",
+        "Then use WMNT for swaps, LP, and Aave.",
       { token: input, resolved_address: "native" }
     );
   }
@@ -480,7 +479,7 @@ interface UnsignedTxResult {
    *
    * Sender is extracted from args in priority order:
    *   sender > owner > on_behalf_of > recipient
-   * This covers all builder call patterns (transfers, Aave, LP, etc.).
+   * This covers all builder call patterns (swaps, Aave, LP, etc.).
    *
    * When `idempotency_scope.sender` is `"unscoped"`, the executor MUST
    * inject its own signing wallet address before deduplicating — the raw
@@ -691,133 +690,6 @@ export async function buildUnwrapMnt(
     },
     warnings: [],
     built_at_utc: d.now()
-  };
-}
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-// =========================================================================
-// Tool: mantle_buildTransferNative
-// =========================================================================
-
-export async function buildTransferNative(
-  args: Record<string, unknown>,
-  deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
-  const d = withDeps(deps);
-  const { network } = normalizeNetwork(args);
-
-  const to = requireAddress(args.to, "to");
-
-  // Reject zero address to prevent silent burns
-  if (to.toLowerCase() === ZERO_ADDRESS) {
-    throw new MantleMcpError(
-      "INVALID_RECIPIENT",
-      "Cannot transfer to the zero address (0x0000...0000). This would irreversibly burn the tokens.",
-      "Provide a valid recipient address.",
-      { field: "to", value: to }
-    );
-  }
-
-  const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
-  const amountDecimal = formatUnits(amountRaw, 18);
-
-  const warnings: string[] = [];
-  const sw = sepoliaWarning(network);
-  if (sw) warnings.push(sw);
-
-  return {
-    intent: "transfer_native",
-    human_summary: `Transfer ${amountDecimal} MNT → ${to}`,
-    unsigned_tx: {
-      to,
-      data: "0x",
-      value: "0x" + amountRaw.toString(16),
-      chainId: chainId(network)
-    },
-    warnings,
-    built_at_utc: d.now()
-  };
-}
-
-// =========================================================================
-// Tool: mantle_buildTransferToken
-// =========================================================================
-
-export async function buildTransferToken(
-  args: Record<string, unknown>,
-  deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
-  const d = withDeps(deps);
-  const { network } = normalizeNetwork(args);
-
-  const to = requireAddress(args.to, "to");
-
-  // Reject zero address to prevent silent burns
-  if (to.toLowerCase() === ZERO_ADDRESS) {
-    throw new MantleMcpError(
-      "INVALID_RECIPIENT",
-      "Cannot transfer to the zero address (0x0000...0000). This would irreversibly burn the tokens.",
-      "Provide a valid recipient address.",
-      { field: "to", value: to }
-    );
-  }
-
-  const tokenInput = requireString(args.token, "token");
-
-  // Reject native MNT — must use buildTransferNative for native transfers
-  if (tokenInput.toUpperCase() === "MNT") {
-    throw new MantleMcpError(
-      "USE_NATIVE_TRANSFER",
-      "MNT is the native gas token and cannot be transferred via ERC-20 transfer.",
-      "Use mantle_buildTransferNative (CLI: mantle-cli transfer send-native) to transfer native MNT.",
-      { token: tokenInput }
-    );
-  }
-
-  const resolved = await resolveToken(d, tokenInput, network);
-
-  // Double-check: reject if resolved address is "native" sentinel
-  if (resolved.address === "native" || !isAddress(resolved.address, { strict: false })) {
-    throw new MantleMcpError(
-      "USE_NATIVE_TRANSFER",
-      `Token '${resolved.symbol}' resolves to the native asset and cannot be transferred via ERC-20 transfer.`,
-      "Use mantle_buildTransferNative (CLI: mantle-cli transfer send-native) to transfer native MNT.",
-      { token: tokenInput, resolved_address: resolved.address }
-    );
-  }
-
-  const amountRaw = requirePositiveAmount(args.amount, "amount", resolved.decimals);
-  const amountDecimal = formatUnits(amountRaw, resolved.decimals);
-
-  const transferWarnings: string[] = [];
-  const sw = sepoliaWarning(network);
-  if (sw) transferWarnings.push(sw);
-
-  const data = encodeFunctionData({
-    abi: ERC20_ABI,
-    functionName: "transfer",
-    args: [to as `0x${string}`, amountRaw]
-  });
-
-  return {
-    intent: "transfer_token",
-    human_summary: `Transfer ${amountDecimal} ${resolved.symbol} → ${to}`,
-    unsigned_tx: {
-      to: resolved.address,
-      data,
-      value: "0x0",
-      chainId: chainId(network)
-    },
-    warnings: transferWarnings,
-    built_at_utc: d.now(),
-    token_info: {
-      token_in: {
-        symbol: resolved.symbol,
-        decimals: resolved.decimals,
-        address: resolved.address
-      }
-    }
   };
 }
 
@@ -3116,100 +2988,6 @@ export async function buildCollectFees(
 // =========================================================================
 
 export const defiWriteTools: Record<string, Tool> = {
-  mantle_buildTransferNative: {
-    name: "mantle_buildTransferNative",
-    description:
-      "Build an unsigned transaction to transfer native MNT to a recipient address. " +
-      "Handles decimal-to-wei conversion and hex encoding deterministically — " +
-      "NEVER manually compute wei values or hex-encode transfer amounts.\n\n" +
-      "DEDUPLICATION: Response includes idempotency_key. Pass sender (signing wallet address) " +
-      "to scope the key per-wallet. Pass request_id (unique per user intent) to prevent " +
-      "false deduplication across separate user requests.\n\n" +
-      "Examples:\n" +
-      "- Send 15 MNT: amount='15', to='0x...', sender='0x<signing_wallet>'\n" +
-      "- Send 0.5 MNT: amount='0.5', to='0x...'",
-    inputSchema: {
-      type: "object",
-      properties: {
-        to: {
-          type: "string",
-          description: "Recipient address."
-        },
-        amount: {
-          type: "string",
-          description: "Decimal amount of MNT to transfer (e.g. '15', '0.5')."
-        },
-        sender: {
-          type: "string",
-          description: "Signing wallet address. Scopes idempotency_key to this wallet so different wallets can independently execute identical transfers."
-        },
-        request_id: {
-          type: "string",
-          description: "Unique ID for this user intent (e.g. UUID). Prevents false deduplication when the same wallet legitimately builds identical transactions for different requests."
-        },
-        network: {
-          type: "string",
-          description: "Network: 'mainnet' (default) or 'sepolia'."
-        },
-        nonce: {
-          type: "number",
-          description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
-        }
-      },
-      required: ["to", "amount"]
-    },
-    handler: wrapBuildHandler(buildTransferNative)
-  },
-
-  mantle_buildTransferToken: {
-    name: "mantle_buildTransferToken",
-    description:
-      "Build an unsigned ERC-20 transfer transaction to send tokens to a recipient. " +
-      "Resolves token symbol to address and decimals from the registry, then encodes " +
-      "the transfer calldata deterministically — NEVER manually compute raw amounts " +
-      "or hex-encode transfer values.\n\n" +
-      "DEDUPLICATION: Response includes idempotency_key. Pass sender (signing wallet address) " +
-      "to scope the key per-wallet.\n\n" +
-      "Examples:\n" +
-      "- Send 100 USDC: token='USDC', amount='100', to='0x...', sender='0x<signing_wallet>'\n" +
-      "- Send 50 WMNT: token='WMNT', amount='50', to='0x...'",
-    inputSchema: {
-      type: "object",
-      properties: {
-        token: {
-          type: "string",
-          description: "Token symbol (e.g. 'USDC', 'WMNT', 'USDT0') or address."
-        },
-        to: {
-          type: "string",
-          description: "Recipient address."
-        },
-        amount: {
-          type: "string",
-          description: "Decimal amount of tokens to transfer (e.g. '100', '0.5')."
-        },
-        sender: {
-          type: "string",
-          description: "Signing wallet address. Scopes idempotency_key to this wallet."
-        },
-        request_id: {
-          type: "string",
-          description: "Unique ID for this user intent. Prevents false deduplication across separate requests."
-        },
-        network: {
-          type: "string",
-          description: "Network: 'mainnet' (default) or 'sepolia'."
-        },
-        nonce: {
-          type: "number",
-          description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
-        }
-      },
-      required: ["token", "to", "amount"]
-    },
-    handler: wrapBuildHandler(buildTransferToken)
-  },
-
   mantle_buildApprove: {
     name: "mantle_buildApprove",
     description:

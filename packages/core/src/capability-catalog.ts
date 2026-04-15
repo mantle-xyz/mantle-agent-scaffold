@@ -359,28 +359,6 @@ const CAPABILITIES: CapabilityEntry[] = [
 
   // ── DeFi Write (Transaction Builders) ──────────────────────────────────
   {
-    id: "mantle_buildTransferNative",
-    name: "Build Transfer Native MNT",
-    category: "execute",
-    mutates: true,
-    auth: "none",
-    summary: "Build unsigned tx to transfer native MNT to a recipient. Handles wei conversion and hex encoding deterministically.",
-    cli_command: "mantle-cli transfer send-native --to <address> --amount <n> --json",
-    example: "{ \"to\": \"0x1234...\", \"amount\": \"15\" }",
-    tags: ["transfer", "send", "MNT", "native", "tx"]
-  },
-  {
-    id: "mantle_buildTransferToken",
-    name: "Build Transfer ERC-20 Token",
-    category: "execute",
-    mutates: true,
-    auth: "none",
-    summary: "Build unsigned tx to transfer an ERC-20 token to a recipient. Resolves token decimals and encodes transfer calldata deterministically.",
-    cli_command: "mantle-cli transfer send-token --token <token> --to <address> --amount <n> --json",
-    example: "{ \"token\": \"USDC\", \"to\": \"0x1234...\", \"amount\": \"100\" }",
-    tags: ["transfer", "send", "ERC-20", "token", "tx"]
-  },
-  {
     id: "mantle_buildApprove",
     name: "Build Approve",
     category: "execute",
