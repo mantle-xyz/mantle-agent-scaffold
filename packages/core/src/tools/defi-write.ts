@@ -507,6 +507,7 @@ interface UnsignedTxResult {
     bin_step?: number;
     router_version?: number;
     pool_address?: string;
+    router_address?: string;
   };
   /** Present on Aave operations — the reserve's aToken and debt token. */
   aave_reserve?: {
@@ -976,7 +977,8 @@ function buildMoeMultihopSwapFromQuoter(params: {
     },
     pool_params: {
       provider: "merchant_moe",
-      bin_step: quoterRoute.binSteps[0]
+      bin_step: quoterRoute.binSteps[0],
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1046,10 +1048,11 @@ export async function buildSwap(
   const amountInDecimal = formatUnits(amountInRaw, tokenIn.decimals);
   const deadline = d.deadline();
 
-  // ── Allowance pre-check (non-blocking warning) ────────────────────
+  // ── Allowance pre-check (blocking) ───────────────────────────────
   // When an explicit owner/sender address is provided, read their allowance
-  // for the router and warn if insufficient. We do NOT use `recipient` here
-  // because recipient is the output receiver, not the token owner/signer.
+  // for the router and ABORT if insufficient. This prevents the agent from
+  // signing & broadcasting a swap that will revert with STF (SafeTransferFrom
+  // failed) because the router has no approval to pull tokenIn.
   const swapWarnings: string[] = [];
   const swSepolia = sepoliaWarning(network);
   if (swSepolia) swapWarnings.push(swSepolia);
@@ -1069,14 +1072,21 @@ export async function buildSwap(
       }) as bigint;
       if (allowance < amountInRaw) {
         const allowanceDecimal = formatUnits(allowance, tokenIn.decimals);
-        swapWarnings.push(
-          `INSUFFICIENT ALLOWANCE: ${tokenIn.symbol} allowance for ${provider} router is ${allowanceDecimal}, ` +
-          `but swap requires ${amountInDecimal}. Build an approve tx first: ` +
-          `mantle-cli approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner} --json`
+        throw new MantleMcpError(
+          "INSUFFICIENT_ALLOWANCE",
+          `${tokenIn.symbol} allowance for ${provider} router (${routerAddress}) is ${allowanceDecimal}, ` +
+          `but this swap requires ${amountInDecimal}. The transaction would revert on-chain with STF (SafeTransferFrom failed).`,
+          `Approve the router first:\n` +
+          `  mantle_buildApprove({ token: "${tokenIn.symbol}", spender: "${routerAddress}", amount: "${amountInDecimal}", owner: "${swapOwner}" })\n` +
+          `Or via CLI:\n` +
+          `  mantle-cli approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner}`,
+          { token: tokenIn.symbol, spender: routerAddress, required: amountInDecimal, current_allowance: allowanceDecimal, owner: swapOwner }
         );
       }
-    } catch {
-      // Non-critical — proceed without allowance check
+    } catch (err) {
+      // Re-throw our own INSUFFICIENT_ALLOWANCE error; swallow RPC failures
+      if (err instanceof MantleMcpError) throw err;
+      // Non-critical RPC failure — proceed without allowance check
     }
   }
 
@@ -1362,7 +1372,8 @@ function buildV3Swap(params: {
     },
     pool_params: {
       provider,
-      fee_tier: feeTier
+      fee_tier: feeTier,
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1445,7 +1456,8 @@ function buildMoeSwap(params: {
     pool_params: {
       provider: "merchant_moe",
       bin_step: binStep,
-      router_version: routerVersion
+      router_version: routerVersion,
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1520,7 +1532,8 @@ function buildV3MultihopSwap(params: {
     },
     pool_params: {
       provider,
-      fee_tier: route.fees[0] // primary leg fee tier
+      fee_tier: route.fees[0], // primary leg fee tier
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -3097,7 +3110,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote to get expected output, provider, and resolved_pool_params\n2. Call mantle_buildApprove for token_in → router (if allowance insufficient)\n3. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, and quote_fee_tier/quote_provider from resolved_pool_params for cross-validation\n4. Sign and broadcast each unsigned_tx\n\nThe response includes pool_params showing the actual fee_tier/bin_step used — compare with your quote's resolved_pool_params to verify consistency.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...'",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69… for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -3161,7 +3174,7 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         owner: {
           type: "string",
-          description: "Wallet address that owns the input tokens (the signer). Used for optional allowance pre-check — emits a warning if allowance is insufficient."
+          description: "STRONGLY RECOMMENDED: Wallet address that owns the input tokens (the signer). Triggers a blocking allowance check — if allowance is insufficient, the call rejects with INSUFFICIENT_ALLOWANCE (includes the correct router_address to approve) instead of returning a swap tx that would revert on-chain."
         },
         nonce: {
           type: "number",
