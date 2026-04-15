@@ -105,7 +105,7 @@ import {
 // ABIs
 import { WMNT_ABI } from "../lib/abis/wmnt.js";
 import { V3_SWAP_ROUTER_ABI, V3_POSITION_MANAGER_ABI } from "../lib/abis/uniswap-v3.js";
-import { LB_ROUTER_ABI, LB_QUOTER_ABI, LB_FACTORY_ABI } from "../lib/abis/merchant-moe-lb.js";
+import { LB_ROUTER_ABI, LB_QUOTER_ABI, LB_FACTORY_ABI, LB_PAIR_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-pool.js";
 import {
   discoverBestV3Pool as discoverBestV3PoolShared,
@@ -1837,7 +1837,7 @@ export async function buildAddLiquidity(
 
   // merchant_moe LB
   const binStep = typeof args.bin_step === "number" ? args.bin_step : 25;
-  const result = buildMoeAddLiquidity({
+  const result = await buildMoeAddLiquidity({
     tokenA,
     tokenB,
     amountARaw,
@@ -1849,19 +1849,20 @@ export async function buildAddLiquidity(
     deadline,
     network,
     binStep,
-    activeIdDesired:
-      typeof args.active_id === "number" ? args.active_id : 8388608,
+    activeIdOverride:
+      typeof args.active_id === "number" ? args.active_id : null,
     idSlippage: typeof args.id_slippage === "number" ? args.id_slippage : 5,
     deltaIds: Array.isArray(args.delta_ids)
       ? (args.delta_ids as number[])
-      : [0],
+      : null,
     distributionX: Array.isArray(args.distribution_x)
       ? (args.distribution_x as number[])
-      : [1e18],
+      : null,
     distributionY: Array.isArray(args.distribution_y)
       ? (args.distribution_y as number[])
-      : [1e18],
-    now: d.now()
+      : null,
+    now: d.now(),
+    deps: d
   });
   result.warnings.push(...warnings);
   result.pool_params = {
@@ -2000,7 +2001,7 @@ async function buildV3AddLiquidity(params: {
   };
 }
 
-function buildMoeAddLiquidity(params: {
+async function buildMoeAddLiquidity(params: {
   tokenA: ResolvedToken;
   tokenB: ResolvedToken;
   amountARaw: bigint;
@@ -2012,31 +2013,26 @@ function buildMoeAddLiquidity(params: {
   deadline: bigint;
   network: Network;
   binStep: number;
-  activeIdDesired: number;
+  activeIdOverride: number | null;
   idSlippage: number;
-  deltaIds: number[];
-  distributionX: number[];
-  distributionY: number[];
+  deltaIds: number[] | null;
+  distributionX: number[] | null;
+  distributionY: number[] | null;
   now: string;
-}): UnsignedTxResult {
+  deps: DefiWriteDeps;
+}): Promise<UnsignedTxResult> {
   const {
     tokenA,
     tokenB,
-    amountARaw,
-    amountBRaw,
-    amountADecimal,
-    amountBDecimal,
     slippageBps,
     recipient,
     deadline,
     network,
     binStep,
-    activeIdDesired,
+    activeIdOverride,
     idSlippage,
-    deltaIds,
-    distributionX,
-    distributionY,
-    now
+    now,
+    deps
   } = params;
 
   const routerAddress = getContractAddress(
@@ -2045,19 +2041,170 @@ function buildMoeAddLiquidity(params: {
     network
   );
 
-  const amountAMin =
-    (amountARaw * BigInt(10000 - slippageBps)) / 10000n;
-  const amountBMin =
-    (amountBRaw * BigInt(10000 - slippageBps)) / 10000n;
+  const warnings: string[] = [];
 
+  // ── Step 1: Resolve LBPair and read on-chain state ──────────────────
+  const client = deps.getClient(network);
+  const factoryAddr = getContractAddress("merchant_moe", "lb_factory_v2_2", network) as `0x${string}`;
+
+  const pairInfo = await client.readContract({
+    address: factoryAddr,
+    abi: LB_FACTORY_ABI,
+    functionName: "getLBPairInformation",
+    args: [
+      tokenA.address as `0x${string}`,
+      tokenB.address as `0x${string}`,
+      BigInt(binStep)
+    ]
+  }) as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
+
+  if (!pairInfo.LBPair || pairInfo.LBPair === "0x0000000000000000000000000000000000000000") {
+    throw new MantleMcpError(
+      "POOL_NOT_FOUND",
+      `No Merchant Moe LB pair found for ${tokenA.symbol}/${tokenB.symbol} with bin step ${binStep}.`,
+      "Use 'mantle-cli lp find-pools --token-a <A> --token-b <B>' to discover available pools and their bin steps.",
+      { token_a: tokenA.symbol, token_b: tokenB.symbol, bin_step: binStep }
+    );
+  }
+
+  const pairAddr = pairInfo.LBPair as `0x${string}`;
+
+  // Read active bin ID and canonical tokenX from the pair contract
+  const [activeIdRaw, pairTokenX] = await Promise.all([
+    client.readContract({
+      address: pairAddr,
+      abi: LB_PAIR_ABI,
+      functionName: "getActiveId"
+    }) as Promise<number>,
+    client.readContract({
+      address: pairAddr,
+      abi: LB_PAIR_ABI,
+      functionName: "getTokenX"
+    }) as Promise<`0x${string}`>
+  ]);
+
+  const activeIdDesired = activeIdOverride ?? Number(activeIdRaw);
+  if (activeIdOverride == null) {
+    warnings.push(
+      `Auto-resolved active bin ID from on-chain: ${activeIdDesired} (pair: ${pairAddr.slice(0, 10)}...).`
+    );
+  }
+
+  // ── Step 2: Sort tokens to match the pair's canonical order ─────────
+  // LB pairs have a fixed tokenX (lower address) / tokenY (higher address)
+  // ordering. The router reverts with LBRouter__WrongTokenOrder if mismatched.
+  const tokenAIsX = tokenA.address.toLowerCase() === pairTokenX.toLowerCase();
+  const tokenBIsX = tokenB.address.toLowerCase() === pairTokenX.toLowerCase();
+  if (!tokenAIsX && !tokenBIsX) {
+    throw new MantleMcpError(
+      "POOL_NOT_FOUND",
+      `LB pair tokenX (${pairTokenX}) matches neither ${tokenA.symbol} (${tokenA.address}) nor ${tokenB.symbol} (${tokenB.address}).`,
+      "Re-check token addresses and bin step. The pair may be misconfigured.",
+      { pair: pairAddr, pairTokenX, tokenA: tokenA.address, tokenB: tokenB.address }
+    );
+  }
+  const [tokenX, tokenY, amountXRaw, amountYRaw, amountXDecimal, amountYDecimal] = tokenAIsX
+    ? [tokenA, tokenB, params.amountARaw, params.amountBRaw, params.amountADecimal, params.amountBDecimal]
+    : [tokenB, tokenA, params.amountBRaw, params.amountARaw, params.amountBDecimal, params.amountADecimal];
+
+  const amountXMin = (amountXRaw * BigInt(10000 - slippageBps)) / 10000n;
+  const amountYMin = (amountYRaw * BigInt(10000 - slippageBps)) / 10000n;
+
+  // ── Step 3: Resolve distribution (user-provided or auto-generate) ───
+  let deltaIds: number[];
+  let distributionX: number[];
+  let distributionY: number[];
+
+  if (params.deltaIds != null && params.distributionX != null && params.distributionY != null) {
+    // User explicitly provided all three — use as-is
+    deltaIds = params.deltaIds;
+    distributionX = params.distributionX;
+    distributionY = params.distributionY;
+
+    // Validate array lengths match
+    if (deltaIds.length !== distributionX.length || deltaIds.length !== distributionY.length) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        `delta_ids (${deltaIds.length}), distribution_x (${distributionX.length}), and distribution_y (${distributionY.length}) must have the same length.`,
+        "Provide arrays of equal length for all three distribution parameters.",
+        { delta_ids_len: deltaIds.length, dist_x_len: distributionX.length, dist_y_len: distributionY.length }
+      );
+    }
+
+    // Validate distribution sums equal 1e18 (LB router enforces this on-chain)
+    const ONE_E18 = BigInt("1000000000000000000");
+    const sumX = distributionX.reduce((a, b) => a + BigInt(Math.floor(b)), 0n);
+    const sumY = distributionY.reduce((a, b) => a + BigInt(Math.floor(b)), 0n);
+    if (sumX !== ONE_E18 || sumY !== ONE_E18) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        `distribution_x must sum to 1e18 (got ${sumX}), distribution_y must sum to 1e18 (got ${sumY}). ` +
+        `The LB router enforces this invariant on-chain.`,
+        "Each distribution array should sum to exactly 1000000000000000000 (1e18). " +
+        "Use 0 for bins that should not receive the respective token.",
+        { sum_x: sumX.toString(), sum_y: sumY.toString(), expected: ONE_E18.toString() }
+      );
+    }
+  } else {
+    if (params.deltaIds != null || params.distributionX != null || params.distributionY != null) {
+      // Some but not all distribution params provided — warn and auto-generate
+      warnings.push(
+        "Partial distribution parameters provided (need all three: delta_ids, distribution_x, distribution_y). " +
+        "Using auto-generated uniform distribution instead."
+      );
+    }
+
+    // Auto-generate a uniform "spot" distribution across ±3 bins (7 bins).
+    // LB convention:
+    //   - bins above active (positive delta): hold only tokenX
+    //   - bins below active (negative delta): hold only tokenY
+    //   - active bin (delta 0): holds both tokenX and tokenY
+    const HALF_SPREAD = 3;
+    deltaIds = [];
+    for (let i = -HALF_SPREAD; i <= HALF_SPREAD; i++) deltaIds.push(i);
+
+    const numBinsX = HALF_SPREAD + 1; // active + above (0, +1, +2, +3)
+    const numBinsY = HALF_SPREAD + 1; // below + active (-3, -2, -1, 0)
+
+    // Compute per-bin fractions (must sum to exactly 1e18 = 100%)
+    const fracX = Math.floor(1e18 / numBinsX);
+    const fracY = Math.floor(1e18 / numBinsY);
+    // Put rounding remainder in the active bin (delta 0)
+    const remainderX = 1e18 - fracX * numBinsX;
+    const remainderY = 1e18 - fracY * numBinsY;
+
+    distributionX = [];
+    distributionY = [];
+    for (const delta of deltaIds) {
+      // tokenX: active bin + bins above active
+      if (delta >= 0) {
+        distributionX.push(delta === 0 ? fracX + remainderX : fracX);
+      } else {
+        distributionX.push(0);
+      }
+      // tokenY: bins below active + active bin
+      if (delta <= 0) {
+        distributionY.push(delta === 0 ? fracY + remainderY : fracY);
+      } else {
+        distributionY.push(0);
+      }
+    }
+
+    warnings.push(
+      `Auto-generated uniform distribution across ${deltaIds.length} bins ` +
+      `(delta ${deltaIds[0]} to ${deltaIds[deltaIds.length - 1]}) around active bin ${activeIdDesired}.`
+    );
+  }
+
+  // ── Step 4: Build calldata ──────────────────────────────────────────
   const liquidityParameters = {
-    tokenX: tokenA.address as `0x${string}`,
-    tokenY: tokenB.address as `0x${string}`,
+    tokenX: tokenX.address as `0x${string}`,
+    tokenY: tokenY.address as `0x${string}`,
     binStep: BigInt(binStep),
-    amountX: amountARaw,
-    amountY: amountBRaw,
-    amountXMin: amountAMin,
-    amountYMin: amountBMin,
+    amountX: amountXRaw,
+    amountY: amountYRaw,
+    amountXMin,
+    amountYMin,
     activeIdDesired: BigInt(activeIdDesired),
     idSlippage: BigInt(idSlippage),
     deltaIds: deltaIds.map(BigInt),
@@ -2076,14 +2223,14 @@ function buildMoeAddLiquidity(params: {
 
   return {
     intent: "add_liquidity",
-    human_summary: `Add liquidity on Merchant Moe LB: ${amountADecimal} ${tokenA.symbol} + ${amountBDecimal} ${tokenB.symbol} (bin step: ${binStep})`,
+    human_summary: `Add liquidity on Merchant Moe LB: ${amountXDecimal} ${tokenX.symbol} (X) + ${amountYDecimal} ${tokenY.symbol} (Y) (bin step: ${binStep}, active bin: ${activeIdDesired}, bins: ${deltaIds.length})`,
     unsigned_tx: {
       to: routerAddress,
       data,
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings,
     built_at_utc: now
   };
 }
@@ -2256,6 +2403,8 @@ export async function buildRemoveLiquidity(
   };
 }
 
+const UINT128_MAX = BigInt("340282366920938463463374607431768211455");
+
 function buildV3RemoveLiquidity(params: {
   provider: "agni" | "fluxion";
   tokenId: bigint;
@@ -2308,8 +2457,8 @@ function buildV3RemoveLiquidity(params: {
       {
         tokenId,
         recipient: recipient as `0x${string}`,
-        amount0Max: BigInt("340282366920938463463374607431768211455"), // uint128 max
-        amount1Max: BigInt("340282366920938463463374607431768211455")
+        amount0Max: UINT128_MAX,
+        amount1Max: UINT128_MAX
       }
     ]
   });
@@ -3011,8 +3160,6 @@ export async function getSwapPairs(
 // Tool 10: mantle_buildCollectFees
 // =========================================================================
 
-const UINT128_MAX = BigInt("340282366920938463463374607431768211455");
-
 export async function buildCollectFees(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
@@ -3063,7 +3210,55 @@ export async function buildCollectFees(
     network
   );
 
-  const data = encodeFunctionData({
+  // Validate position existence on-chain
+  const client = d.getClient(network);
+  const positionResult = await client.readContract({
+    address: positionManager as `0x${string}`,
+    abi: V3_POSITION_MANAGER_ABI,
+    functionName: "positions",
+    args: [tokenId]
+  });
+
+  const positionData = positionResult as readonly [
+    bigint, string, string, string, number, number, number,
+    bigint, bigint, bigint, bigint, bigint
+  ];
+  const liquidity = positionData[7];
+  const tokensOwed0 = positionData[10];
+  const tokensOwed1 = positionData[11];
+
+  if (liquidity === 0n && tokensOwed0 === 0n && tokensOwed1 === 0n) {
+    throw new MantleMcpError(
+      "INVALID_INPUT",
+      `Position #${tokenId} has no liquidity and no accrued fees to collect.`,
+      "Verify the token ID is correct and that the position has earned fees.",
+      { token_id: tokenIdStr, provider }
+    );
+  }
+
+  const warnings: string[] = [
+    `Pre-poke tokensOwed: token0=${tokensOwed0.toString()}, token1=${tokensOwed1.toString()}. Actual collected amount may be higher after the poke settles pending fees.`
+  ];
+
+  const deadline = d.deadline();
+
+  // Poke the position (decreaseLiquidity with liquidity=0) to settle pending
+  // fees into tokensOwed0/tokensOwed1 before collecting.
+  const pokeData = encodeFunctionData({
+    abi: V3_POSITION_MANAGER_ABI,
+    functionName: "decreaseLiquidity",
+    args: [
+      {
+        tokenId,
+        liquidity: 0n,
+        amount0Min: 0n,
+        amount1Min: 0n,
+        deadline
+      }
+    ]
+  });
+
+  const collectData = encodeFunctionData({
     abi: V3_POSITION_MANAGER_ABI,
     functionName: "collect",
     args: [
@@ -3076,18 +3271,24 @@ export async function buildCollectFees(
     ]
   });
 
+  const data = encodeFunctionData({
+    abi: V3_POSITION_MANAGER_ABI,
+    functionName: "multicall",
+    args: [[pokeData, collectData]]
+  });
+
   const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
 
   return {
     intent: "collect_fees",
-    human_summary: `Collect accrued fees from ${providerLabel} V3 position #${tokenId} to ${recipient}`,
+    human_summary: `Poke + collect accrued fees from ${providerLabel} V3 position #${tokenId} to ${recipient}`,
     unsigned_tx: {
       to: positionManager,
       data,
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings,
     built_at_utc: d.now()
   };
 }
@@ -3346,7 +3547,7 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         active_id: {
           type: "number",
-          description: "Active bin ID. For merchant_moe."
+          description: "Active bin ID override. For merchant_moe. If omitted, auto-resolved from on-chain pair state (recommended)."
         },
         id_slippage: {
           type: "number",
@@ -3680,7 +3881,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildCollectFees: {
     name: "mantle_buildCollectFees",
     description:
-      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id from a block explorer (Mantlescan), https://agni.finance, or the unsigned_tx response of a prior mantle_buildAddLiquidity call (mantle_getV3Positions is currently disabled — see the capability catalog).\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'",
+      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id from a block explorer (Mantlescan), https://agni.finance, or the unsigned_tx response of a prior mantle_buildAddLiquidity call (mantle_getV3Positions is currently disabled — see the capability catalog).\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'\n\nNOTE: Merchant Moe LB fees are embedded in bin reserves and collected automatically when removing liquidity via mantle_buildRemoveLiquidity. This tool only supports V3 positions (Agni/Fluxion).",
     inputSchema: {
       type: "object",
       properties: {

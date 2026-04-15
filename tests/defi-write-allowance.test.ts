@@ -182,6 +182,8 @@ describe("buildSwap INSUFFICIENT_ALLOWANCE throw path", () => {
   });
 });
 
+const FAKE_LB_PAIR = "0x0000000000000000000000000000000000001234";
+
 describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
   it("throws when tokenA allowance is insufficient (LB provider, both reads fulfilled)", async () => {
     try {
@@ -199,8 +201,14 @@ describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
         {
           resolveTokenInput: async (input: string) => mapToken(input),
           getClient: () => ({
-            readContract: async ({ address }: { address: string }) => {
-              // USDC insufficient (required 1000, has 5); WMNT plenty.
+            readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+              // LB Factory / Pair on-chain reads for buildMoeAddLiquidity
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: FAKE_LB_PAIR, createdByOwner: false, ignoredForRouting: false };
+              }
+              if (functionName === "getActiveId") return 8388608;
+              if (functionName === "getTokenX") return USDC_MAINNET.address;
+              // ERC-20 allowance: USDC insufficient (required 1000, has 5); WMNT plenty.
               if (address.toLowerCase() === USDC_MAINNET.address.toLowerCase()) return 5_000000n;
               return 1_000_000_000000000000000000n;
             }
@@ -241,7 +249,14 @@ describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
         {
           resolveTokenInput: async (input: string) => mapToken(input),
           getClient: () => ({
-            readContract: async ({ address }: { address: string }) => {
+            readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+              // LB Factory / Pair on-chain reads for buildMoeAddLiquidity
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: FAKE_LB_PAIR, createdByOwner: false, ignoredForRouting: false };
+              }
+              if (functionName === "getActiveId") return 8388608;
+              if (functionName === "getTokenX") return USDC_MAINNET.address;
+              // ERC-20 allowance: USDC insufficient; WMNT rejects (non-standard ERC-20)
               if (address.toLowerCase() === USDC_MAINNET.address.toLowerCase()) return 5_000000n;
               throw new Error("WMNT non-standard ERC-20 rejected");
             }
@@ -255,6 +270,88 @@ describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(MantleMcpError);
       expect((err as MantleMcpError).code).toBe("INSUFFICIENT_ALLOWANCE");
+    }
+  });
+
+  it("allowance check works correctly when tokenB is the canonical tokenX (B-is-X sort path)", async () => {
+    // When getTokenX returns WMNT (tokenB), the sort branch assigns tokenB as X.
+    // The allowance check must still fire against the pre-sort tokenA (USDC) with
+    // the correct required amount, confirming the sort doesn't corrupt amounts.
+    try {
+      await buildAddLiquidity(
+        {
+          provider: "merchant_moe",
+          token_a: "USDC",
+          token_b: "WMNT",
+          amount_a: "1000",
+          amount_b: "1",
+          recipient: RECIPIENT,
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: FAKE_LB_PAIR, createdByOwner: false, ignoredForRouting: false };
+              }
+              if (functionName === "getActiveId") return 8388608;
+              // Return WMNT as tokenX — exercises the B-is-X branch
+              if (functionName === "getTokenX") return WMNT_MAINNET.address;
+              // USDC insufficient; WMNT plenty
+              if (address.toLowerCase() === USDC_MAINNET.address.toLowerCase()) return 5_000000n;
+              return 1_000_000_000000000000000000n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAddLiquidity to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_ALLOWANCE");
+      const meta = e.details as Record<string, unknown>;
+      // USDC is tokenA (pre-sort), required amount should still be 1000
+      expect(meta.token).toBe("USDC");
+      expect(meta.required).toBe("1000");
+    }
+  });
+
+  it("throws POOL_NOT_FOUND when factory returns zero-address pair", async () => {
+    try {
+      await buildAddLiquidity(
+        {
+          provider: "merchant_moe",
+          token_a: "USDC",
+          token_b: "WMNT",
+          amount_a: "1000",
+          amount_b: "1",
+          recipient: RECIPIENT,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async ({ functionName }: { functionName: string }) => {
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: "0x0000000000000000000000000000000000000000", createdByOwner: false, ignoredForRouting: false };
+              }
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAddLiquidity to throw POOL_NOT_FOUND");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      expect((err as MantleMcpError).code).toBe("POOL_NOT_FOUND");
     }
   });
 });
