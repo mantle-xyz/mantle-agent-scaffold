@@ -387,7 +387,7 @@ const CAPABILITIES: CapabilityEntry[] = [
     mutates: true,
     auth: "optional",
     summary: "Build unsigned ERC-20 approve tx. Pass --owner to auto-skip if allowance is already sufficient.",
-    cli_command: "mantle-cli swap approve --token <token> --spender <address> --amount <n> --owner <address> --json",
+    cli_command: "mantle-cli approve --token <token> --spender <address> --amount <n> --owner <address> --json",
     example: "{ \"token\": \"USDC\", \"spender\": \"0x319B...\", \"amount\": \"100\", \"owner\": \"0x1234...\" }",
     workflow_before: ["mantle_buildSwap", "mantle_buildAddLiquidity", "mantle_buildAaveSupply"],
     tags: ["approve", "allowance", "ERC-20", "tx"]

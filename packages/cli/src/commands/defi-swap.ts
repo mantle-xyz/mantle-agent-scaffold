@@ -6,10 +6,12 @@ import { parseNumberOption, parseIntegerOption } from "../utils.js";
 /**
  * DEX swap & token operations:
  *   swap build-swap   — Build unsigned swap transaction
- *   swap approve      — Build unsigned ERC-20 approve for whitelisted spender
  *   swap wrap-mnt     — Build unsigned wrap MNT → WMNT
  *   swap unwrap-mnt   — Build unsigned unwrap WMNT → MNT
  *   swap pairs        — List known trading pairs & pool parameters
+ *
+ * Note: `approve` has been hoisted to the top level (`mantle-cli approve`)
+ * since approvals are required across DeFi (swap, LP, Aave), not just swaps.
  */
 export function registerSwap(parent: Command): void {
   const group = parent
@@ -67,30 +69,6 @@ export function registerSwap(parent: Command): void {
         quote_provider: opts.quoteProvider,
         quote_fee_tier: opts.quoteFeeTier,
         quote_bin_step: opts.quoteBinStep,
-        network: globals.network
-      });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
-    });
-
-  // ── approve ─────────────────────────────────────────────────────────
-  group
-    .command("approve")
-    .description("Build an unsigned ERC-20 approve for a whitelisted spender")
-    .requiredOption("--token <token>", "token symbol or address")
-    .requiredOption("--spender <address>", "whitelisted contract address to approve")
-    .requiredOption("--amount <amount>", "decimal amount to approve, or 'max' for unlimited")
-    .option("--owner <address>", "wallet address (used to check existing allowance)")
-    .action(async (opts: Record<string, unknown>, cmd: Command) => {
-      const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildApprove"].handler({
-        token: opts.token,
-        spender: opts.spender,
-        amount: String(opts.amount),
-        owner: opts.owner,
         network: globals.network
       });
       if (globals.json) {

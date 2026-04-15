@@ -1200,7 +1200,7 @@ export async function buildSwap(
         swapWarnings.push(
           `INSUFFICIENT ALLOWANCE: ${tokenIn.symbol} allowance for ${provider} router is ${allowanceDecimal}, ` +
           `but swap requires ${amountInDecimal}. Build an approve tx first: ` +
-          `mantle-cli swap approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner} --json`
+          `mantle-cli approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner} --json`
         );
       }
     } catch {
