@@ -75,6 +75,7 @@ export function registerLp(parent: Command): void {
     .option("--delta-ids <json>", "relative bin IDs as JSON array. For merchant_moe")
     .option("--distribution-x <json>", "token X distribution per bin as JSON array. For merchant_moe")
     .option("--distribution-y <json>", "token Y distribution per bin as JSON array. For merchant_moe")
+    .option("--owner <address>", "wallet address that will sign (enables blocking allowance check)")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const hasTokenAmounts = opts.amountA != null && opts.amountB != null;
@@ -92,6 +93,7 @@ export function registerLp(parent: Command): void {
         amount_b: opts.amountB != null ? String(opts.amountB) : undefined,
         amount_usd: opts.amountUsd,
         recipient: opts.recipient,
+        owner: opts.owner,
         slippage_bps: opts.slippageBps,
         fee_tier: opts.feeTier,
         tick_lower: opts.tickLower,
