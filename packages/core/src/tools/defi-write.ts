@@ -2505,10 +2505,13 @@ export async function buildRemoveLiquidity(
     }
 
     if (ids.length === 0) {
+      const holderHint = lpHolder !== recipient
+        ? ` LP balances were queried for ${lpHolder} (--owner).`
+        : ` If the LP tokens are held by a different address (e.g. the transaction signer), provide owner=<signer-address>.`;
       throw new MantleMcpError(
         "INVALID_INPUT",
-        "No LP token balance found in any scanned bins for this recipient.",
-        "Verify the owner address has LP positions in this pair. Use mantle_getLBPositions to check.",
+        `No LP token balance found in any scanned bins for ${lpHolder}.${holderHint}`,
+        "Verify the address has LP positions in this pair. Use mantle_getLBPositions to check.",
         { pair: pairAddr, lp_holder: lpHolder, recipient, bin_step: binStep }
       );
     }
