@@ -1,7 +1,7 @@
 import { formatUnits } from "viem";
 import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
-import { ERC20_ABI } from "../lib/erc20.js";
+import { ERC20_ABI } from "../lib/abis/erc20.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { fetchTokenListSnapshot, type TokenListSnapshot } from "../lib/token-list.js";
 import {

@@ -16,7 +16,7 @@ import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { AAVE_V3_POOL_ABI } from "../lib/abis/aave-v3-pool.js";
-import { ERC20_ABI } from "../lib/erc20.js";
+import { ERC20_ABI } from "../lib/abis/erc20.js";
 import { AAVE_V3_MANTLE_RESERVES } from "../config/aave-reserves.js";
 import { MANTLE_PROTOCOLS } from "../config/protocols.js";
 import type { Tool } from "../types.js";

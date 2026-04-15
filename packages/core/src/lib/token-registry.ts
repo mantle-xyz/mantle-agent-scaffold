@@ -2,7 +2,7 @@ import { getAddress, isAddress } from "viem";
 import { MantleMcpError } from "../errors.js";
 import { MANTLE_TOKENS, type TokenEntry } from "../config/tokens.js";
 import { getPublicClient } from "./clients.js";
-import { ERC20_ABI } from "./erc20.js";
+import { ERC20_ABI } from "./abis/erc20.js";
 import type { Network } from "../types.js";
 
 export interface ResolvedTokenInput {
