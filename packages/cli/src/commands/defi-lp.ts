@@ -24,7 +24,8 @@ export function registerLp(parent: Command): void {
     .description(
       "Build unsigned add-liquidity transaction. " +
       "V3 (agni/fluxion) mints an NFT position; Merchant Moe LB adds to bins.\n" +
-      "Amount modes: provide --amount-a + --amount-b, OR --amount-usd for automatic sizing."
+      "Amount modes: provide --amount-a + --amount-b, OR --amount-usd for automatic sizing.\n" +
+      "Range presets: --range-preset aggressive (±5%) | moderate (±10%) | conservative (±20%)."
     )
     .requiredOption("--provider <provider>", "DEX provider: agni, fluxion, or merchant_moe")
     .requiredOption("--token-a <token>", "first token symbol or address")
@@ -49,13 +50,19 @@ export function registerLp(parent: Command): void {
     )
     .option(
       "--tick-lower <tick>",
-      "lower tick bound. For agni/fluxion. Default: full range",
+      "lower tick bound. For agni/fluxion. Overrides --range-preset. Default: full range",
       (v: string) => parseIntegerOption(v, "--tick-lower")
     )
     .option(
       "--tick-upper <tick>",
-      "upper tick bound. For agni/fluxion. Default: full range",
+      "upper tick bound. For agni/fluxion. Overrides --range-preset. Default: full range",
       (v: string) => parseIntegerOption(v, "--tick-upper")
+    )
+    .option(
+      "--range-preset <preset>",
+      "price range preset: aggressive (±5%), moderate (±10%), conservative (±20%). " +
+      "Auto-computes tick bounds (V3) or bin spread (LB) from current pool price. " +
+      "Overridden by explicit --tick-lower/--tick-upper."
     )
     .option(
       "--bin-step <step>",
@@ -98,6 +105,7 @@ export function registerLp(parent: Command): void {
         fee_tier: opts.feeTier,
         tick_lower: opts.tickLower,
         tick_upper: opts.tickUpper,
+        range_preset: opts.rangePreset,
         bin_step: opts.binStep,
         active_id: opts.activeId,
         id_slippage: opts.idSlippage,

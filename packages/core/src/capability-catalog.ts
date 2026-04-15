@@ -338,11 +338,11 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "none",
-    summary: "Discover all available pools for a token pair across Agni, Fluxion, and Merchant Moe by querying factory contracts on-chain.",
+    summary: "Discover all available pools for a token pair across Agni, Fluxion, and Merchant Moe. Returns TVL, 24h volume, fee APR from DexScreener and a recommended_pool with the highest composite score.",
     cli_command: "mantle-cli lp find-pools --token-a <token> --token-b <token> --json",
     example: "{ \"token_a\": \"USDC\", \"token_b\": \"USDe\" }",
     workflow_before: ["mantle_getV3PoolState", "mantle_analyzePool"],
-    tags: ["pool", "discover", "factory", "all DEX"]
+    tags: ["pool", "discover", "factory", "all DEX", "TVL", "volume", "recommendation"]
   },
   // mantle_discoverTopPools — temporarily disabled (DexScreener rate-limit issues)
 
@@ -399,10 +399,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "execute",
     mutates: true,
     auth: "required",
-    summary: "Build unsigned add-liquidity tx. Supports token amounts, USD amount (--amount-usd), and V3/LB pools.",
-    cli_command: "mantle-cli lp add --provider <dex> --token-a <t> --token-b <t> --amount-a <n> --amount-b <n> --recipient <addr> --json",
-    example: "{ \"provider\": \"agni\", \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"amount_a\": \"10\", \"amount_b\": \"8\", \"recipient\": \"0x1234...\" }",
-    tags: ["LP", "add", "liquidity", "tx"]
+    summary: "Build unsigned add-liquidity tx. Supports token amounts, USD amount (--amount-usd), range presets (aggressive/moderate/conservative), and V3/LB pools.",
+    cli_command: "mantle-cli lp add --provider <dex> --token-a <t> --token-b <t> --amount-usd <n> --range-preset moderate --recipient <addr> --json",
+    example: "{ \"provider\": \"agni\", \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"amount_usd\": 1000, \"range_preset\": \"moderate\", \"recipient\": \"0x1234...\" }",
+    tags: ["LP", "add", "liquidity", "tx", "range_preset"]
   },
   {
     id: "mantle_buildRemoveLiquidity",

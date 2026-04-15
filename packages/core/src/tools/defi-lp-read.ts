@@ -27,6 +27,7 @@ import {
   LB_FACTORY_ABI
 } from "../lib/abis/merchant-moe-lb.js";
 import { listPairs, listAllPairs, TOKENS as DEX_TOKENS, type MoePair, type V3Pair, type DexPair } from "../config/dex-pairs.js";
+import { V3_FEE_TIER_CANDIDATES } from "../lib/pool-discovery.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1360,10 +1361,18 @@ export async function analyzePool(
 // =========================================================================
 
 /**
- * Common V3 fee tiers to scan (in hundredths of bip).
- * 100=0.01%, 500=0.05%, 3000=0.3%, 10000=1%
+ * Common V3 fee tiers to scan.
+ *
+ * Sourced from the canonical list in `pool-discovery.ts` to guarantee
+ * that this tool (findPools) and the quote/build code paths scan the
+ * same set of fee tiers. Historically this constant was duplicated here
+ * and drifted out of sync — it was missing `2500`, which hid several
+ * real Agni pools (WMNT/USDe, cmETH/USDe, COOK/USDe, mETH/USDT, etc.).
+ * Do not redeclare locally; import from pool-discovery instead.
+ *
+ * 100=0.01%, 500=0.05%, 2500=0.25%, 3000=0.3%, 10000=1%
  */
-const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+const V3_FEE_TIERS = V3_FEE_TIER_CANDIDATES;
 
 /**
  * LB bin steps to scan on-chain. Covers all values known to exist on
@@ -1398,6 +1407,10 @@ interface FoundPool {
    */
   liquidity_unit?: "v3_virtual_liquidity" | "lb_active_bin_native_mixed";
   has_liquidity: boolean;
+  /** DexScreener market data — null when DexScreener data is unavailable. */
+  tvl_usd?: number | null;
+  volume_24h_usd?: number | null;
+  fee_apr_pct?: number | null;
 }
 
 async function findPools(
@@ -1578,12 +1591,105 @@ async function findPools(
     }
   }
 
-  // Sort: pools with liquidity first, then by provider
+  // ── Fetch DexScreener market data for all pools with liquidity ──────
+  const poolsWithLiquidity = pools.filter((p) => p.has_liquidity);
+  let dexScreenerWarning: string | null = null;
+
+  if (poolsWithLiquidity.length > 0) {
+    const chainId = resolveDexScreenerChain(network);
+    if (chainId) {
+      // DexScreener supports batch queries: /latest/dex/pairs/{chain}/{addr1,addr2,...}
+      const BATCH_SIZE = 30;
+      const allAddresses = poolsWithLiquidity.map((p) => p.pool_address);
+      const dexScreenerMap = new Map<string, DexScreenerPairData>();
+
+      for (let i = 0; i < allAddresses.length; i += BATCH_SIZE) {
+        const batch = allAddresses.slice(i, i + BATCH_SIZE);
+        const url = `${DEXSCREENER_API_BASE}/latest/dex/pairs/${chainId}/${batch.join(",")}`;
+        const payload = await fetchJsonSafe(url);
+        if (payload && typeof payload === "object" && Array.isArray(payload.pairs)) {
+          for (const pair of payload.pairs as DexScreenerPairData[]) {
+            const addr = pair.pairAddress?.toLowerCase();
+            if (addr) {
+              dexScreenerMap.set(addr, pair);
+            }
+          }
+        } else {
+          dexScreenerWarning = "DexScreener query failed or returned empty. TVL/volume data may be incomplete.";
+        }
+      }
+
+      // Enrich pools with market data
+      for (const pool of pools) {
+        const pair = dexScreenerMap.get(pool.pool_address.toLowerCase());
+        if (pair) {
+          const tvl = asFiniteNumber(pair.liquidity?.usd);
+          const vol = asFiniteNumber(pair.volume?.h24);
+          pool.tvl_usd = tvl;
+          pool.volume_24h_usd = vol;
+
+          // Compute fee APR if we have TVL and volume
+          if (tvl != null && tvl > 0 && vol != null) {
+            let feeRate: number;
+            if (pool.fee_tier != null) {
+              feeRate = pool.fee_tier / 1_000_000; // V3: 3000 → 0.003
+            } else if (pool.bin_step != null) {
+              // LB: base fee ≈ binStep × 0.001 (simplified, actual depends on volatility)
+              feeRate = pool.bin_step * 0.001;
+            } else {
+              feeRate = 0.003; // fallback
+            }
+            pool.fee_apr_pct = Math.round((vol * feeRate * 365) / tvl * 100) / 100;
+          }
+        }
+      }
+    }
+  }
+
+  // Sort: pools with liquidity first, then by composite score (TVL + volume)
   pools.sort((a, b) => {
     if (a.has_liquidity && !b.has_liquidity) return -1;
     if (!a.has_liquidity && b.has_liquidity) return 1;
+    // Among pools with liquidity, sort by composite score:
+    // normalize TVL (weight 0.6) + volume (weight 0.4)
+    const scoreA = (a.tvl_usd ?? 0) * 0.6 + (a.volume_24h_usd ?? 0) * 0.4;
+    const scoreB = (b.tvl_usd ?? 0) * 0.6 + (b.volume_24h_usd ?? 0) * 0.4;
+    if (scoreA !== scoreB) return scoreB - scoreA;
     return a.provider.localeCompare(b.provider);
   });
+
+  // Pick recommended pool: highest composite score among pools with liquidity
+  let recommended_pool: {
+    pool_address: string;
+    provider: string;
+    fee_tier?: number;
+    bin_step?: number;
+    tvl_usd: number | null;
+    volume_24h_usd: number | null;
+    fee_apr_pct: number | null;
+    reason: string;
+  } | null = null;
+
+  const poolsWithMarketData = pools.filter(
+    (p) => p.has_liquidity && (p.tvl_usd != null || p.volume_24h_usd != null)
+  );
+  if (poolsWithMarketData.length > 0) {
+    const best = poolsWithMarketData[0]; // already sorted by composite score
+    const reasons: string[] = [];
+    if (best.tvl_usd != null) reasons.push(`TVL $${best.tvl_usd.toLocaleString()}`);
+    if (best.volume_24h_usd != null) reasons.push(`24h volume $${best.volume_24h_usd.toLocaleString()}`);
+    if (best.fee_apr_pct != null) reasons.push(`fee APR ${best.fee_apr_pct}%`);
+    recommended_pool = {
+      pool_address: best.pool_address,
+      provider: best.provider,
+      fee_tier: best.fee_tier,
+      bin_step: best.bin_step,
+      tvl_usd: best.tvl_usd ?? null,
+      volume_24h_usd: best.volume_24h_usd ?? null,
+      fee_apr_pct: best.fee_apr_pct ?? null,
+      reason: `Highest composite score (TVL × 0.6 + volume × 0.4). ${reasons.join(", ")}.`
+    };
+  }
 
   return {
     token_a: {
@@ -1597,6 +1703,7 @@ async function findPools(
       decimals: tokenB.decimals
     },
     pools,
+    recommended_pool,
     total_found: pools.length,
     with_liquidity: pools.filter((p) => p.has_liquidity).length,
     scanned: {
@@ -1604,6 +1711,7 @@ async function findPools(
       v3_fee_tiers: [...V3_FEE_TIERS],
       lb_bin_steps: [...LB_BIN_STEPS]
     },
+    dexscreener_warning: dexScreenerWarning,
     queried_at_utc: nowUtc()
   };
 }
@@ -2618,7 +2726,17 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_findPools: {
     name: "mantle_findPools",
     description:
-      "Discover all available liquidity pools for a token pair across ALL Mantle DEXes (Agni, Fluxion, Merchant Moe) by querying factory contracts on-chain. Returns every pool with its fee tier/bin step and whether it has liquidity.\n\nThis is the authoritative pool discovery tool — it queries factory contracts directly, not external indexers. Use it BEFORE adding LP to find the best pool.\n\nScans:\n- Agni & Fluxion: fee tiers 100 (0.01%), 500 (0.05%), 3000 (0.3%), 10000 (1%)\n- Merchant Moe: bin steps 1, 2, 5, 10, 15, 20, 25\n\nExamples:\n- Find USDC/USDe pools: token_a='USDC', token_b='USDe'\n- Find WMNT/USDC pools: token_a='WMNT', token_b='USDC'",
+      "Discover all available liquidity pools for a token pair across ALL Mantle DEXes (Agni, Fluxion, Merchant Moe) by querying factory contracts on-chain. Returns every pool with its fee tier/bin step, whether it has liquidity, and DexScreener market data (TVL, 24h volume, fee APR).\n\n" +
+      "POOL RECOMMENDATION: Returns a `recommended_pool` field — the pool with the highest composite score " +
+      "(TVL × 0.6 + volume × 0.4). Always prefer the recommended pool when adding LP unless the user has a specific preference.\n\n" +
+      "This is the authoritative pool discovery tool — it queries factory contracts directly, not external indexers. " +
+      "Use it BEFORE adding LP to find the best pool.\n\n" +
+      "Scans:\n- Agni & Fluxion: fee tiers 100 (0.01%), 500 (0.05%), 3000 (0.3%), 10000 (1%)\n- Merchant Moe: bin steps 1, 2, 5, 10, 15, 20, 25, 50, 75, 100\n\n" +
+      "Pool output fields:\n" +
+      "- tvl_usd: Total Value Locked in USD (from DexScreener)\n" +
+      "- volume_24h_usd: 24-hour trading volume in USD\n" +
+      "- fee_apr_pct: Estimated fee APR based on volume/TVL\n\n" +
+      "Examples:\n- Find USDC/USDe pools: token_a='USDC', token_b='USDe'\n- Find WMNT/USDC pools: token_a='WMNT', token_b='USDC'",
     inputSchema: {
       type: "object",
       properties: {

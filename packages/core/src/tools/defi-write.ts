@@ -1568,6 +1568,85 @@ export async function buildAddLiquidity(
   let amountBRaw: bigint;
   const warnings: string[] = [];
 
+  // --- Range preset pre-resolution ---
+  // Resolve range_preset into tick/bin bounds BEFORE USD amount mode,
+  // because the V3 ratio calculation needs the final tick range.
+  const RANGE_PRESETS: Record<string, number> = {
+    aggressive: 5,
+    moderate: 10,
+    conservative: 20
+  };
+  const rangePreset = typeof args.range_preset === "string"
+    ? args.range_preset.toLowerCase().trim()
+    : null;
+  if (rangePreset && !RANGE_PRESETS[rangePreset]) {
+    throw new MantleMcpError(
+      "INVALID_INPUT",
+      `Invalid range_preset: '${rangePreset}'.`,
+      "Use one of: 'aggressive' (±5%), 'moderate' (±10%), 'conservative' (±20%).",
+      { range_preset: rangePreset }
+    );
+  }
+  const rangePresetPct = rangePreset ? RANGE_PRESETS[rangePreset] : null;
+
+  // For V3: pre-compute tick_lower/tick_upper from range_preset when not explicitly provided
+  let resolvedTickLower: number | null = null;
+  let resolvedTickUpper: number | null = null;
+  if ((provider === "agni" || provider === "fluxion") && rangePresetPct != null
+      && typeof args.tick_lower !== "number" && typeof args.tick_upper !== "number") {
+    const usedFeeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
+    const client = d.getClient(network);
+    const factoryAddress = getContractAddress(provider, "factory", network);
+    const poolAddr = await client.readContract({
+      address: factoryAddress as `0x${string}`,
+      abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
+      functionName: "getPool",
+      args: [tokenA.address as `0x${string}`, tokenB.address as `0x${string}`, usedFeeTier]
+    }) as `0x${string}`;
+
+    if (!poolAddr || poolAddr === "0x0000000000000000000000000000000000000000") {
+      throw new MantleMcpError(
+        "POOL_NOT_FOUND",
+        `Cannot use range_preset: No ${provider} pool found for ${tokenA.symbol}/${tokenB.symbol} at fee tier ${usedFeeTier}.`,
+        "Verify the token pair and fee tier, or provide tick_lower/tick_upper explicitly.",
+        { token_a: tokenA.symbol, token_b: tokenB.symbol, fee_tier: usedFeeTier, provider }
+      );
+    }
+
+    const [slot0Raw, tickSpacingRaw] = await Promise.all([
+      client.readContract({
+        address: poolAddr,
+        abi: [{ type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ name: "sqrtPriceX96", type: "uint160" }, { name: "tick", type: "int24" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint8" }, { name: "", type: "bool" }] }] as const,
+        functionName: "slot0"
+      }) as Promise<readonly [bigint, number, ...unknown[]]>,
+      client.readContract({
+        address: poolAddr,
+        abi: [{ type: "function", name: "tickSpacing", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "int24" }] }] as const,
+        functionName: "tickSpacing"
+      }) as Promise<number>
+    ]);
+
+    const currentTick = slot0Raw[1];
+    const tickSpacing = Number(tickSpacingRaw);
+
+    const tickOffsetUp = Math.floor(Math.log(1 + rangePresetPct / 100) / Math.log(1.0001));
+    const tickOffsetDown = Math.floor(Math.log(1 - rangePresetPct / 100) / Math.log(1.0001));
+
+    resolvedTickLower = Math.floor((currentTick + tickOffsetDown) / tickSpacing) * tickSpacing;
+    resolvedTickUpper = Math.ceil((currentTick + tickOffsetUp) / tickSpacing) * tickSpacing;
+
+    warnings.push(
+      `range_preset '${rangePreset}' (±${rangePresetPct}%): computed tick range [${resolvedTickLower}, ${resolvedTickUpper}] ` +
+      `from current tick ${currentTick} (tick spacing ${tickSpacing}).`
+    );
+  }
+
+  // Helper: get the effective tick bounds (explicit > range_preset > full range)
+  const effectiveTickLower = typeof args.tick_lower === "number" ? args.tick_lower
+    : resolvedTickLower != null ? resolvedTickLower : -887220;
+  const effectiveTickUpper = typeof args.tick_upper === "number" ? args.tick_upper
+    : resolvedTickUpper != null ? resolvedTickUpper : 887220;
+
   // --- USD amount mode ---
   if (args.amount_usd != null && args.amount_usd !== "") {
     const usdAmount =
@@ -1613,8 +1692,8 @@ export async function buildAddLiquidity(
     let ratioMethod = "50/50 (default)";
 
     if (provider === "agni" || provider === "fluxion") {
-      const tickLower = typeof args.tick_lower === "number" ? args.tick_lower : -887220;
-      const tickUpper = typeof args.tick_upper === "number" ? args.tick_upper : 887220;
+      const tickLower = effectiveTickLower;
+      const tickUpper = effectiveTickUpper;
       const isFullRange = tickLower === -887220 && tickUpper === 887220;
 
       if (!isFullRange) {
@@ -1809,6 +1888,7 @@ export async function buildAddLiquidity(
 
   if (provider === "agni" || provider === "fluxion") {
     const usedFeeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
+
     const result = await buildV3AddLiquidity({
       provider,
       tokenA,
@@ -1822,8 +1902,8 @@ export async function buildAddLiquidity(
       deadline,
       network,
       feeTier: usedFeeTier,
-      tickLower: typeof args.tick_lower === "number" ? args.tick_lower : -887220,
-      tickUpper: typeof args.tick_upper === "number" ? args.tick_upper : 887220,
+      tickLower: effectiveTickLower,
+      tickUpper: effectiveTickUpper,
       now: d.now()
     });
     result.warnings.push(...warnings);
@@ -1837,6 +1917,22 @@ export async function buildAddLiquidity(
 
   // merchant_moe LB
   const binStep = typeof args.bin_step === "number" ? args.bin_step : 25;
+
+  // When range_preset is provided, compute deltaIds spread from percentage.
+  // LB bin price ratio ≈ 1 + binStep/10000, so for ±X% range:
+  //   numBins = ceil(log(1 + X/100) / log(1 + binStep/10000))
+  let computedDeltaIds: number[] | null = null;
+  if (rangePresetPct != null && !Array.isArray(args.delta_ids)) {
+    const binPriceRatio = 1 + binStep / 10000;
+    const halfSpread = Math.max(1, Math.ceil(Math.log(1 + rangePresetPct / 100) / Math.log(binPriceRatio)));
+    computedDeltaIds = [];
+    for (let i = -halfSpread; i <= halfSpread; i++) computedDeltaIds.push(i);
+    warnings.push(
+      `range_preset '${rangePreset}' (±${rangePresetPct}%): computed ${computedDeltaIds.length} bins ` +
+      `(delta ${computedDeltaIds[0]} to ${computedDeltaIds[computedDeltaIds.length - 1]}) for bin step ${binStep}.`
+    );
+  }
+
   const result = await buildMoeAddLiquidity({
     tokenA,
     tokenB,
@@ -1854,7 +1950,7 @@ export async function buildAddLiquidity(
     idSlippage: typeof args.id_slippage === "number" ? args.id_slippage : 5,
     deltaIds: Array.isArray(args.delta_ids)
       ? (args.delta_ids as number[])
-      : null,
+      : computedDeltaIds,
     distributionX: Array.isArray(args.distribution_x)
       ? (args.distribution_x as number[])
       : null,
@@ -2158,32 +2254,41 @@ async function buildMoeAddLiquidity(params: {
       );
     }
   } else {
-    if (params.deltaIds != null || params.distributionX != null || params.distributionY != null) {
-      // Some but not all distribution params provided — warn and auto-generate
+    if (params.deltaIds != null && params.distributionX == null && params.distributionY == null) {
+      // deltaIds provided but no distributions — auto-generate uniform distribution
+      // for the provided deltaIds (e.g. from range_preset)
+      deltaIds = params.deltaIds;
+    } else if (params.deltaIds != null || params.distributionX != null || params.distributionY != null) {
+      // Some but not all distribution params provided — warn and use default deltaIds
       warnings.push(
         "Partial distribution parameters provided (need all three: delta_ids, distribution_x, distribution_y). " +
         "Using auto-generated uniform distribution instead."
       );
+      // Auto-generate default ±3 bins
+      const HALF_SPREAD = 3;
+      deltaIds = [];
+      for (let i = -HALF_SPREAD; i <= HALF_SPREAD; i++) deltaIds.push(i);
+    } else {
+      // No distribution params at all — use default ±3 bins
+      const HALF_SPREAD = 3;
+      deltaIds = [];
+      for (let i = -HALF_SPREAD; i <= HALF_SPREAD; i++) deltaIds.push(i);
     }
 
-    // Auto-generate a uniform "spot" distribution across ±3 bins (7 bins).
+    // Auto-generate a uniform "spot" distribution for the deltaIds.
     // LB convention:
     //   - bins above active (positive delta): hold only tokenX
     //   - bins below active (negative delta): hold only tokenY
     //   - active bin (delta 0): holds both tokenX and tokenY
-    const HALF_SPREAD = 3;
-    deltaIds = [];
-    for (let i = -HALF_SPREAD; i <= HALF_SPREAD; i++) deltaIds.push(i);
-
-    const numBinsX = HALF_SPREAD + 1; // active + above (0, +1, +2, +3)
-    const numBinsY = HALF_SPREAD + 1; // below + active (-3, -2, -1, 0)
+    const numBinsX = deltaIds.filter(d => d >= 0).length; // active + above
+    const numBinsY = deltaIds.filter(d => d <= 0).length; // below + active
 
     // Compute per-bin fractions (must sum to exactly 1e18 = 100%)
-    const fracX = Math.floor(1e18 / numBinsX);
-    const fracY = Math.floor(1e18 / numBinsY);
+    const fracX = numBinsX > 0 ? Math.floor(1e18 / numBinsX) : 0;
+    const fracY = numBinsY > 0 ? Math.floor(1e18 / numBinsY) : 0;
     // Put rounding remainder in the active bin (delta 0)
-    const remainderX = 1e18 - fracX * numBinsX;
-    const remainderY = 1e18 - fracY * numBinsY;
+    const remainderX = numBinsX > 0 ? 1e18 - fracX * numBinsX : 0;
+    const remainderY = numBinsY > 0 ? 1e18 - fracY * numBinsY : 0;
 
     distributionX = [];
     distributionY = [];
@@ -3656,7 +3761,7 @@ export const defiWriteTools: Record<string, Tool> = {
         fee_tier: {
           type: "number",
           description:
-            "V3 fee tier (500=0.05%, 3000=0.3%, 10000=1%). Auto-resolved from known pairs for agni/fluxion."
+            "V3 fee tier (100=0.01%, 500=0.05%, 2500=0.25%, 3000=0.3%, 10000=1%). Auto-resolved from on-chain liquidity for agni/fluxion when omitted."
         },
         bin_step: {
           type: "number",
@@ -3698,10 +3803,20 @@ export const defiWriteTools: Record<string, Tool> = {
     description:
       "Build an unsigned add-liquidity transaction. For V3 DEXes (agni/fluxion) mints an NFT position. For Merchant Moe LB adds to bin-based pools.\n\n" +
       "Amount modes:\n- Token amounts: provide amount_a and amount_b directly\n- USD amount: provide amount_usd to auto-split between tokens (fetches live prices; V3 uses pool-state-aware ratio)\n\n" +
+      "Range presets (RECOMMENDED for simplicity):\n" +
+      "- 'aggressive' — ±5% around current price (highest capital efficiency, needs frequent rebalancing)\n" +
+      "- 'moderate' — ±10% around current price (balanced efficiency vs. rebalancing)\n" +
+      "- 'conservative' — ±20% around current price (wider range, less rebalancing needed)\n" +
+      "For V3: auto-computes tick_lower/tick_upper from current pool tick. For Merchant Moe LB: auto-computes bin spread.\n" +
+      "Explicit tick_lower/tick_upper override range_preset.\n\n" +
       "IMPORTANT: Pass 'owner' to enable a blocking allowance check. If either token's allowance is insufficient, " +
       "the call rejects with INSUFFICIENT_ALLOWANCE and includes the correct spender address and a ready-to-use " +
       "mantle_buildApprove invocation. The response always includes pool_params.router_address — the spender to approve.\n\n" +
-      "Examples:\n- Token mode: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...', owner='0x...'\n- USD mode: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, recipient='0x...', owner='0x...'",
+      "WORKFLOW: Before calling this tool, use mantle_findPools to discover the best pool (recommended_pool) for the token pair.\n\n" +
+      "Examples:\n" +
+      "- With range preset: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, range_preset='moderate', recipient='0x...', owner='0x...'\n" +
+      "- Token mode: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...', owner='0x...'\n" +
+      "- USD mode: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -3741,15 +3856,24 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         fee_tier: {
           type: "number",
-          description: "V3 fee tier (default: 3000). For agni/fluxion."
+          description: "V3 fee tier for agni/fluxion: 100=0.01% (stablecoins, e.g. USDe/USDT), 500=0.05%, 2500=0.25% (e.g. WMNT/USDe, cmETH/USDe on Agni), 3000=0.3%, 10000=1%. Default: 3000 — but you MUST pass the actual pool's fee tier (use mantle_findPools to look it up); defaulting to 3000 will fail for pools that don't exist at that tier."
         },
         tick_lower: {
           type: "number",
-          description: "Lower tick bound. For agni/fluxion. Default: full range."
+          description: "Lower tick bound. For agni/fluxion. Overrides range_preset. Default: full range."
         },
         tick_upper: {
           type: "number",
-          description: "Upper tick bound. For agni/fluxion. Default: full range."
+          description: "Upper tick bound. For agni/fluxion. Overrides range_preset. Default: full range."
+        },
+        range_preset: {
+          type: "string",
+          description:
+            "RECOMMENDED: Price range preset for LP position. " +
+            "'aggressive' (±5%), 'moderate' (±10%), 'conservative' (±20%). " +
+            "Auto-computes tick bounds (V3) or bin spread (Merchant Moe LB) from current pool price. " +
+            "Overridden by explicit tick_lower/tick_upper. " +
+            "If omitted and no ticks provided, defaults to full range (V3) or ±3 bins (LB)."
         },
         bin_step: {
           type: "number",
