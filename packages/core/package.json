@@ -25,12 +25,13 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build"
   },
   "dependencies": {
-    "viem": "^2.39.0"
+    "viem": "2.46.3",
+    "zod": "3.25.76"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -32,14 +32,14 @@
     "serverUseInstructions": "Mantle L2 chain tools. Gas token is MNT, not ETH. CRITICAL RULES: (1) NEVER hold or request private keys - all transaction tools return unsigned payloads only. (2) ALWAYS call mantle_resolveAddress or mantle_resolveToken to verify addresses before using them in transaction-building tools; for token symbols, mantle_resolveToken must double-check against https://token-list.mantle.xyz. (3) ALWAYS ensure a fresh simulation result before presenting a transaction for signing (for mantle_build*Tx, use the returned simulation field; use mantle_simulateTx for custom calldata or re-simulation). (4) ALWAYS present the human_summary field to the user and obtain explicit confirmation before any signing step. (5) Gas estimates and native balances are in MNT. (6) When an address cannot be resolved through the registry, STOP and ask the user rather than proceeding with an unverified address."
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "rm -rf dist && tsc && chmod +x dist/index.js",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@mantleio/mantle-core": "0.1.10",
-    "@modelcontextprotocol/sdk": "~1.27.1"
+    "@modelcontextprotocol/sdk": "1.27.1"
   },
   "engines": {
     "node": ">=20.0.0"

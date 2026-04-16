@@ -1,12 +1,13 @@
 import type { Command } from "commander";
 import { allTools } from "@mantleio/mantle-core/tools/index.js";
 import { formatKeyValue, formatTable, formatJson } from "../formatter.js";
-import { parseIntegerOption, parseNumberOption, parseJsonArray } from "../utils.js";
+import { parseIntegerOption, parseNumberOption, parseJsonArray, parseBigIntArray } from "../utils.js";
 
 /**
  * Liquidity provision operations:
  *   lp add           — Build unsigned add-liquidity transaction
  *   lp remove        — Build unsigned remove-liquidity transaction
+ *   lp approve-lb    — Build unsigned LB Pair operator approval (required before Moe remove)
  *   lp positions     — List V3 LP positions for an owner
  *   lp pool-state    — Read V3 pool on-chain state (tick, price, liquidity)
  *   lp analyze       — Deep pool analysis (APR, risk, investment projections)
@@ -181,8 +182,64 @@ export function registerLp(parent: Command): void {
         token_a: opts.tokenA,
         token_b: opts.tokenB,
         bin_step: opts.binStep,
-        ids: opts.ids ? parseJsonArray(opts.ids as string, "--ids") : undefined,
-        amounts: opts.amounts ? parseJsonArray(opts.amounts as string, "--amounts") : undefined,
+        // Use BigInt-safe parsing so large LB-token amounts (commonly >2^53)
+        // don't lose precision through JSON.parse → Number rounding, which
+        // would cause on-chain burn() to revert with balance mismatch.
+        ids: opts.ids ? parseBigIntArray(opts.ids as string, "--ids") : undefined,
+        amounts: opts.amounts ? parseBigIntArray(opts.amounts as string, "--amounts") : undefined,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        formatUnsignedTxResult(result as Record<string, unknown>);
+      }
+    });
+
+  // ── approve-lb ──────────────────────────────────────────────────────
+  group
+    .command("approve-lb")
+    .description(
+      "Build unsigned LB Pair operator approval (approveForAll). " +
+      "REQUIRED before 'lp remove' for merchant_moe: the router burns your LB shares " +
+      "via LBPair.burn(user,...) and needs isApprovedForAll(user, router)=true. " +
+      "Resolve the pair directly via --pair, or via --token-a/--token-b/--bin-step (looked up through the LB Factory)."
+    )
+    .requiredOption("--operator <address>", "address to approve/revoke (must be whitelisted, typically the LB Router)")
+    .option("--pair <address>", "LB Pair contract address (skip factory lookup)")
+    .option("--token-a <token>", "first token symbol or address (alternative to --pair)")
+    .option("--token-b <token>", "second token symbol or address (alternative to --pair)")
+    .option(
+      "--bin-step <step>",
+      "LB pair bin step (alternative to --pair)",
+      (v: string) => parseIntegerOption(v, "--bin-step")
+    )
+    .option(
+      "--approved <bool>",
+      "true to grant, false to revoke (default: true)",
+      (v: string) => {
+        const s = v.trim().toLowerCase();
+        if (s === "true" || s === "1" || s === "yes") return true;
+        if (s === "false" || s === "0" || s === "no") return false;
+        throw new Error("--approved must be 'true' or 'false'");
+      }
+    )
+    .option("--owner <address>", "wallet address (used to pre-check existing approval and skip if already set)")
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      if (!opts.pair && !(opts.tokenA && opts.tokenB && opts.binStep != null)) {
+        throw new Error(
+          "Provide either --pair, OR all of --token-a + --token-b + --bin-step."
+        );
+      }
+      const result = await allTools["mantle_buildSetLBApprovalForAll"].handler({
+        pair: opts.pair,
+        token_a: opts.tokenA,
+        token_b: opts.tokenB,
+        bin_step: opts.binStep,
+        operator: opts.operator,
+        approved: opts.approved === undefined ? true : opts.approved,
+        owner: opts.owner,
         network: globals.network
       });
       if (globals.json) {

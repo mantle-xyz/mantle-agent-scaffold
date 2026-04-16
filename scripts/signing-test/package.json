@@ -1,0 +1,25 @@
+{
+  "name": "mantle-signing-test",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "End-to-end signing tests for mantle-cli write tools — signs and broadcasts unsigned_tx payloads on Sepolia",
+  "scripts": {
+    "test:swap":      "node --env-file-if-exists=.env --import tsx src/scenario-swap.ts",
+    "test:swap:dry":  "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-swap.ts",
+    "test:lp":        "node --env-file-if-exists=.env --import tsx src/scenario-lp.ts",
+    "test:lp:dry":    "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-lp.ts",
+    "test:aave":      "node --env-file-if-exists=.env --import tsx src/scenario-aave.ts",
+    "test:aave:dry":  "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-aave.ts",
+    "setup:links":    "node src/setup-links.mjs",
+    "debug:positions":"node --import tsx src/debug-positions.ts",
+    "debug:tools":    "node src/debug-tools.mjs",
+    "debug:cli":      "node src/debug-cli.mjs",
+    "debug:pools":    "node --import tsx src/debug-pools.mts"
+  },
+  "dependencies": {
+    "viem": "^2.39.0",
+    "chalk": "^5.4.1",
+    "tsx": "^4.19.0"
+  }
+}
