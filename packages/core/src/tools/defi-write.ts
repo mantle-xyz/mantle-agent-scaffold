@@ -510,7 +510,9 @@ function wrapBuildHandler(
               const maxFee = baseFee * 2n + tip;
               result.unsigned_tx.maxFeePerGas = "0x" + maxFee.toString(16);
               result.unsigned_tx.maxPriorityFeePerGas = "0x" + tip.toString(16);
-              result.unsigned_tx.type = "0x2"; // EIP-1559
+              // NOTE: do NOT set `type: "0x2"` — Privy and some external signers
+              // reject the field outright. EIP-1559 type is auto-inferred by
+              // viem/ethers from the presence of maxFeePerGas.
             } else {
               // Chain does not expose baseFeePerGas — EIP-1559 fields cannot
               // be populated. Gas limit is still set; the signer may need to
@@ -569,8 +571,6 @@ interface UnsignedTxResult {
     chainId: number;
     /** Suggested gas limit. Wallets should use this or estimate on their own. */
     gas?: string;
-    /** EIP-1559 transaction type marker ("0x2"). Present when baseFee is available. */
-    type?: string;
     /** EIP-1559 max fee per gas (baseFee × 2 + tip), hex-encoded wei.
      *  Dynamically fetched from the latest block's baseFeePerGas. */
     maxFeePerGas?: string;

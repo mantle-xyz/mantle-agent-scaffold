@@ -71,7 +71,6 @@ export async function buildTx(
     value: string;
     chainId: number;
     gas?: string;
-    type?: string;
     maxFeePerGas?: string;
     maxPriorityFeePerGas?: string;
   };
@@ -163,7 +162,6 @@ export async function confirmBuild(
     value: string;
     chainId: number;
     gas?: string;
-    type?: string;
     maxFeePerGas?: string;
     maxPriorityFeePerGas?: string;
   };

@@ -131,7 +131,6 @@ export interface UnsignedTx {
   value: string;
   chainId: number;
   gas?: string;
-  type?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
 }
