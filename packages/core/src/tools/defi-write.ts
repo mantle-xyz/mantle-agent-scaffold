@@ -417,11 +417,19 @@ function wrapBuildHandler(
       typeof result.unsigned_tx.data === "string"
     ) {
       // Extract sender scope from all possible arg fields, normalized.
-      // Priority: explicit sender > owner > on_behalf_of > recipient
+      // Priority: explicit sender > owner > on_behalf_of
+      // NOTE: `recipient` is intentionally excluded — for swaps, recipient is
+      // the output destination, not the signer. Using recipient as the
+      // estimateGas `account` would simulate with wrong allowance/balance.
       const sender =
         extractNormalizedAddress(args.sender) ??
         extractNormalizedAddress(args.owner) ??
         extractNormalizedAddress(args.on_behalf_of) ??
+        null;
+
+      // Keep full chain for idempotency scope (recipient is useful there)
+      const idempotencySender =
+        sender ??
         extractNormalizedAddress(args.recipient) ??
         null;
 
@@ -438,12 +446,111 @@ function wrapBuildHandler(
         result.unsigned_tx.nonce = nonceArg;
       }
 
-      const key = computeIdempotencyKey(result.unsigned_tx, sender, requestId);
+      // ------------------------------------------------------------------
+      // Gas estimation + EIP-1559 fee pricing — populate gas, maxFeePerGas,
+      // and maxPriorityFeePerGas from the live chain so external signers
+      // (Privy, etc.) that only sign (no estimation) receive a complete tx.
+      // A 20% buffer is added to gasLimit to guard against minor state
+      // changes between estimation and broadcast.
+      //
+      // When sender is absent, DeFi operations that check msg.sender
+      // (swaps, approvals, Aave) will revert during estimation because
+      // the node simulates as address(0) with zero balance/allowance.
+      // In this case we skip estimation and warn — the signer must
+      // estimate independently.
+      // ------------------------------------------------------------------
+      const txData = result.unsigned_tx.data;
+      const isRealCall = txData && txData !== "0x" && txData.length > 2;
+      if (isRealCall) {
+        // Resolve network BEFORE the try/catch so a bad network arg surfaces
+        // as INVALID_NETWORK, not as a misleading GAS_ESTIMATION_FAILED.
+        const { network: net } = normalizeNetwork(args);
+
+        if (!sender) {
+          // Cannot estimate reliably without a sender — DeFi contracts
+          // check msg.sender for allowance/balance during simulation.
+          result.warnings = result.warnings ?? [];
+          result.warnings.push(
+            "Gas not estimated: no sender address provided (sender/owner/on_behalf_of). " +
+            "The signer MUST call eth_estimateGas before broadcasting."
+          );
+        } else {
+          try {
+            const client = getPublicClient(net);
+
+            const estimateParams: Record<string, unknown> = {
+              to: result.unsigned_tx.to as `0x${string}`,
+              data: txData as `0x${string}`,
+              value: BigInt(result.unsigned_tx.value ?? "0x0"),
+              account: sender as `0x${string}`,
+            };
+
+            // Fetch gas estimate, latest block (for baseFee), and tip in parallel
+            const [rawEstimate, block, maxPriorityFeePerGas] = await Promise.all([
+              client.estimateGas(estimateParams as any),
+              client.getBlock({ blockTag: "latest" }),
+              client.estimateMaxPriorityFeePerGas().catch(() => null as bigint | null),
+            ]);
+
+            // 20% safety buffer on gas limit
+            const bufferedGas = (rawEstimate * 120n) / 100n;
+            result.unsigned_tx.gas = "0x" + bufferedGas.toString(16);
+
+            // EIP-1559 fee parameters from chain state
+            const baseFee = block.baseFeePerGas;
+            if (baseFee != null) {
+              // Minimum tip floor: 0.001 Gwei — avoids stuck transactions on
+              // sequencer chains like Mantle that may enforce a minimum tip.
+              const MIN_TIP = 1_000_000n; // 0.001 Gwei
+              const tip = maxPriorityFeePerGas != null && maxPriorityFeePerGas > MIN_TIP
+                ? maxPriorityFeePerGas
+                : MIN_TIP;
+              // maxFeePerGas = 2× baseFee + tip — same heuristic as ethers/viem
+              // to survive 1-2 blocks of fee increases
+              const maxFee = baseFee * 2n + tip;
+              result.unsigned_tx.maxFeePerGas = "0x" + maxFee.toString(16);
+              result.unsigned_tx.maxPriorityFeePerGas = "0x" + tip.toString(16);
+              result.unsigned_tx.type = "0x2"; // EIP-1559
+            } else {
+              // Chain does not expose baseFeePerGas — EIP-1559 fields cannot
+              // be populated. Gas limit is still set; the signer may need to
+              // provide gasPrice for legacy transaction types.
+              result.warnings = result.warnings ?? [];
+              result.warnings.push(
+                "baseFeePerGas not available from RPC — EIP-1559 fee fields (maxFeePerGas, " +
+                "maxPriorityFeePerGas) are omitted. The signer should set gasPrice for a " +
+                "legacy (type 0) transaction, or provide fee parameters manually."
+              );
+            }
+          } catch (err) {
+            throw new MantleMcpError(
+              "GAS_ESTIMATION_FAILED",
+              `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`,
+              "The transaction may revert on-chain. Check that the sender has sufficient balance " +
+                "and that the calldata/target are correct.",
+              {
+                to: result.unsigned_tx.to,
+                sender: sender ?? null,
+                intent: result.intent ?? null,
+              },
+              {
+                doNot: [
+                  "DO NOT submit a transaction without a valid gas estimate",
+                  "DO NOT hardcode a gas limit as a workaround"
+                ],
+                retryable: true
+              }
+            );
+          }
+        }
+      }
+
+      const key = computeIdempotencyKey(result.unsigned_tx, idempotencySender, requestId);
       return {
         ...result,
         idempotency_key: key,
         idempotency_scope: {
-          sender: sender ?? "unscoped",
+          sender: idempotencySender ?? "unscoped",
           request_id: requestId ?? "none"
         }
       };
@@ -462,6 +569,14 @@ interface UnsignedTxResult {
     chainId: number;
     /** Suggested gas limit. Wallets should use this or estimate on their own. */
     gas?: string;
+    /** EIP-1559 transaction type marker ("0x2"). Present when baseFee is available. */
+    type?: string;
+    /** EIP-1559 max fee per gas (baseFee × 2 + tip), hex-encoded wei.
+     *  Dynamically fetched from the latest block's baseFeePerGas. */
+    maxFeePerGas?: string;
+    /** EIP-1559 max priority fee (tip), hex-encoded wei.
+     *  Dynamically fetched via eth_maxPriorityFeePerGas. */
+    maxPriorityFeePerGas?: string;
     /** Optional nonce override. Only present when caller explicitly provides a nonce
      *  (e.g. after querying mantle_getNonce to work around signer nonce issues). */
     nonce?: number;
@@ -968,8 +1083,7 @@ function buildMoeMultihopSwapFromQuoter(params: {
       to: routerAddress,
       data,
       value: "0x0",
-      chainId: chainId(network),
-      gas: isMultihop ? "0x9EB10" : "0x7A120"
+      chainId: chainId(network)
     },
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
@@ -1366,8 +1480,7 @@ function buildV3Swap(params: {
       to: routerAddress,
       data,
       value: "0x0",
-      chainId: chainId(network),
-      gas: "0x493E0" // 300000 — safe default for V3 swaps
+      chainId: chainId(network)
     },
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
@@ -1449,8 +1562,7 @@ function buildMoeSwap(params: {
       to: routerAddress,
       data,
       value: "0x0",
-      chainId: chainId(network),
-      gas: "0x7A120" // 500000 — safe default for LB swaps
+      chainId: chainId(network)
     },
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
@@ -1526,8 +1638,7 @@ function buildV3MultihopSwap(params: {
       to: routerAddress,
       data,
       value: "0x0",
-      chainId: chainId(network),
-      gas: "0x7A120" // 500000 — higher for multi-hop
+      chainId: chainId(network)
     },
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },

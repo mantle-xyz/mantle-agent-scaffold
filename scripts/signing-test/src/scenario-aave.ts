@@ -280,6 +280,7 @@ test(`Acquire USDT0: swap ${SWAP_WMNT_FOR_USDT0} WMNT → USDT0 on Moe (skip if 
     "--in", "WMNT", "--out", "USDT0",
     "--amount", SWAP_WMNT_FOR_USDT0,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   assertEqual(

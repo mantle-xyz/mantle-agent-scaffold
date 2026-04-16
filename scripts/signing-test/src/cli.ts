@@ -71,6 +71,9 @@ export async function buildTx(
     value: string;
     chainId: number;
     gas?: string;
+    type?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
   };
   warnings: string[];
   [key: string]: unknown;
@@ -91,6 +94,101 @@ export async function buildTx(
       `CLI command did not return unsigned_tx:\n` +
       `  args: ${args.join(" ")}\n` +
       `  stdout: ${result.stdout}`
+    );
+  }
+
+  return result.json;
+}
+
+/**
+ * Two-step build — Step 1: dry-run.
+ *
+ * Calls the CLI with `--dry-run` appended. The CLI returns a preview
+ * (intent, human_summary, warnings, pool parameters …) plus a single-use
+ * `confirmation_token` that expires after 5 minutes. No `unsigned_tx` is
+ * returned at this stage.
+ *
+ * Use {@link confirmBuild} with the token to obtain the actual unsigned_tx.
+ */
+export async function dryRunBuild(
+  args: string[],
+  opts?: { network?: string },
+): Promise<{
+  intent: string;
+  confirmation_token?: string;
+  human_summary?: string;
+  warnings?: string[];
+  [key: string]: unknown;
+}> {
+  const result = await runCli([...args, "--dry-run"], opts);
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `CLI dry-run failed (exit ${result.exitCode}):\n` +
+        `  args: ${args.join(" ")}\n` +
+        `  stderr: ${result.stderr}\n` +
+        `  stdout: ${result.stdout}`,
+    );
+  }
+
+  if (!result.json) {
+    throw new Error(
+      `CLI dry-run did not return JSON:\n` +
+        `  args: ${args.join(" ")}\n` +
+        `  stdout: ${result.stdout}`,
+    );
+  }
+
+  return result.json;
+}
+
+/**
+ * Two-step build — Step 2: confirm.
+ *
+ * Re-runs the same CLI command with `--confirm --confirmation-token <token>`.
+ * The CLI validates that the parameters haven't changed since the dry-run,
+ * consumes the single-use token, and returns the full result including
+ * `unsigned_tx`.
+ */
+export async function confirmBuild(
+  args: string[],
+  confirmationToken: string,
+  opts?: { network?: string },
+): Promise<{
+  intent: string;
+  human_summary: string;
+  unsigned_tx: {
+    to: string;
+    data: string;
+    value: string;
+    chainId: number;
+    gas?: string;
+    type?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
+  };
+  warnings: string[];
+  [key: string]: unknown;
+}> {
+  const result = await runCli(
+    [...args, "--confirm", "--confirmation-token", confirmationToken],
+    opts,
+  );
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `CLI confirm failed (exit ${result.exitCode}):\n` +
+        `  args: ${args.join(" ")}\n` +
+        `  stderr: ${result.stderr}\n` +
+        `  stdout: ${result.stdout}`,
+    );
+  }
+
+  if (!result.json?.unsigned_tx) {
+    throw new Error(
+      `CLI confirm did not return unsigned_tx:\n` +
+        `  args: ${args.join(" ")}\n` +
+        `  stdout: ${result.stdout}`,
     );
   }
 

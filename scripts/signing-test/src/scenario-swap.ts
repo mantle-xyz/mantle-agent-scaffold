@@ -97,6 +97,7 @@ test("Moe: swap WMNT → USDe", async () => {
     "--in", "WMNT", "--out", "USDe",
     "--amount", SWAP_WMNT_AMOUNT,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   assertEqual(tx.unsigned_tx.to.toLowerCase(), MOE_LB_ROUTER.toLowerCase(), "to == Moe LB Router");
@@ -140,6 +141,7 @@ test("Moe: swap USDe → WMNT (roundtrip back)", async () => {
     "--in", "USDe", "--out", "WMNT",
     "--amount", swapIn,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
@@ -182,6 +184,7 @@ test("Agni: swap WMNT → USDe", async () => {
     "--in", "WMNT", "--out", "USDe",
     "--amount", SWAP_WMNT_AMOUNT,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   assertEqual(tx.unsigned_tx.to.toLowerCase(), AGNI_SWAP_ROUTER.toLowerCase(), "to == Agni SwapRouter");
@@ -224,6 +227,7 @@ test("Agni: swap USDe → WMNT (roundtrip back)", async () => {
     "--in", "USDe", "--out", "WMNT",
     "--amount", swapIn,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });

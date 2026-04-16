@@ -131,6 +131,9 @@ export interface UnsignedTx {
   value: string;
   chainId: number;
   gas?: string;
+  type?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
 }
 
 export interface SignAndSendResult {
@@ -174,8 +177,17 @@ export async function signAndSend(
     account: wallet.account,
   };
 
-  // NOTE: intentionally ignore unsigned_tx.gas — the hardcoded suggestions
-  // from defi-write.ts are too low for Mantle. Let the node estimate gas.
+  // Use gas parameters from unsigned_tx when available (dynamically estimated
+  // by wrapBuildHandler via eth_estimateGas + latest block baseFee).
+  if (unsignedTx.gas) {
+    txParams.gas = BigInt(unsignedTx.gas);
+  }
+  if (unsignedTx.maxFeePerGas) {
+    txParams.maxFeePerGas = BigInt(unsignedTx.maxFeePerGas);
+  }
+  if (unsignedTx.maxPriorityFeePerGas) {
+    txParams.maxPriorityFeePerGas = BigInt(unsignedTx.maxPriorityFeePerGas);
+  }
 
   const hash = await wallet.walletClient.sendTransaction(txParams);
 

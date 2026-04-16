@@ -116,6 +116,14 @@ function rejectTransferToProtocol(calldata: string, toAddress?: string): void {
         recipient: recipientHex,
         recipient_label: label,
         ...(toAddress ? { token_contract: toAddress } : {})
+      },
+      {
+        doNot: [
+          "DO NOT use encodeCall or buildRawTx to construct ERC-20 transfers to protocol contracts",
+          "DO NOT attempt to bypass this safety check",
+          "DO NOT fabricate an alternative transfer method"
+        ],
+        retryable: false
       }
     );
   }
@@ -141,7 +149,12 @@ async function parseUnitsHandler(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
       "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC).",
-      { decimals }
+      { decimals },
+      {
+        requiresUserInput: true,
+        questionForUser: "What is the correct number of decimals for this token?",
+        doNot: ["DO NOT guess token decimals"]
+      }
     );
   }
 
@@ -159,7 +172,11 @@ async function parseUnitsHandler(
       "INVALID_INPUT",
       `Failed to parse '${amount}' with ${decimals} decimals: ${err.message}`,
       "Provide a valid decimal number (e.g. '100', '0.5', '1234.567890').",
-      { amount, decimals }
+      { amount, decimals },
+      {
+        requiresUserInput: true,
+        questionForUser: `The amount '${amount}' could not be parsed. Please provide a valid decimal number.`
+      }
     );
   }
 }
@@ -184,7 +201,12 @@ async function formatUnitsHandler(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
       "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC).",
-      { decimals }
+      { decimals },
+      {
+        requiresUserInput: true,
+        questionForUser: "What is the correct number of decimals for this token?",
+        doNot: ["DO NOT guess token decimals"]
+      }
     );
   }
 
@@ -202,7 +224,11 @@ async function formatUnitsHandler(
       "INVALID_INPUT",
       `Failed to format '${raw}' with ${decimals} decimals: ${err.message}`,
       "Provide a valid integer string (e.g. '1000000', '500000000000000000').",
-      { amount_raw: raw, decimals }
+      { amount_raw: raw, decimals },
+      {
+        requiresUserInput: true,
+        questionForUser: `The raw amount '${raw}' could not be formatted. Please provide a valid integer string.`
+      }
     );
   }
 }
@@ -236,7 +262,11 @@ async function encodeCallHandler(
       "INVALID_INPUT",
       `Failed to parse ABI: ${err.message}`,
       'Provide a valid ABI JSON array or human-readable signature like "function transfer(address to, uint256 amount) returns (bool)".',
-      { abi: abiInput }
+      { abi: abiInput },
+      {
+        requiresUserInput: true,
+        questionForUser: "The ABI could not be parsed. Please provide a valid ABI JSON array or human-readable function signature."
+      }
     );
   }
 
@@ -285,7 +315,13 @@ async function encodeCallHandler(
       "ENCODING_FAILED",
       `Failed to encode function call: ${err.message}`,
       "Check that the function name exists in the ABI and the args match the expected types.",
-      { function_name: functionName, args: functionArgs }
+      { function_name: functionName, args: functionArgs },
+      {
+        doNot: [
+          "DO NOT manually construct calldata hex",
+          "DO NOT guess function argument encoding"
+        ]
+      }
     );
   }
 }
@@ -303,7 +339,12 @@ async function buildRawTxHandler(
       "INVALID_ADDRESS",
       `'to' must be a valid Ethereum address, got: ${toRaw}`,
       "Provide a checksummed or lowercase 0x-prefixed 40-hex-character address.",
-      { field: "to", value: toRaw }
+      { field: "to", value: toRaw },
+      {
+        requiresUserInput: true,
+        questionForUser: "Please provide a valid Ethereum address for the 'to' field.",
+        doNot: ["DO NOT guess or fabricate contract addresses"]
+      }
     );
   }
   const to = getAddress(toRaw);
@@ -410,7 +451,9 @@ async function buildRawTxHandler(
     warnings: [
       "⚠ UNVERIFIED MANUAL CONSTRUCTION — this transaction was NOT built by a dedicated CLI command. " +
         "The calldata, target address, and value have NOT been validated against known protocol ABIs. " +
-        "Verify all fields carefully before signing."
+        "Verify all fields carefully before signing.",
+      "Gas fields (gas, maxFeePerGas, maxPriorityFeePerGas) are NOT pre-estimated for raw transactions. " +
+        "The signer MUST call eth_estimateGas and populate fee parameters before broadcasting."
     ],
     built_at_utc: nowUtc()
   };
