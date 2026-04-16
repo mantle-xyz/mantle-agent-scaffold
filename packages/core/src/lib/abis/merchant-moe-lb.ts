@@ -305,6 +305,31 @@ export const LB_PAIR_ABI = [
     stateMutability: "view",
     inputs: [{ name: "id", type: "uint256" }],
     outputs: [{ name: "", type: "uint256" }]
+  },
+  // ---- LBToken approval (ERC-1155-ish, but LB uses approveForAll) ----
+  // NOTE: LBToken's spec names the setter `approveForAll` (not the ERC-1155
+  // standard `setApprovalForAll`). It's a single-operator per-owner flag
+  // that the LB Router requires in order to burn the user's LB shares
+  // during `removeLiquidity`.
+  {
+    type: "function",
+    name: "approveForAll",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "approved", type: "bool" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "isApprovedForAll",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" }
+    ],
+    outputs: [{ name: "", type: "bool" }]
   }
 ] as const;
 

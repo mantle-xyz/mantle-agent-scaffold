@@ -10,6 +10,7 @@ import {
   ReadResourceRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
 import { MantleMcpError, toErrorPayload } from "@mantleio/mantle-core/errors.js";
+import { extractMeta, writeAuditLog } from "./lib/audit-log.js";
 import { getPromptMessages, prompts } from "./prompts.js";
 import { listResources, prefetchResources, readResource } from "./resources.js";
 import { allTools } from "@mantleio/mantle-core/tools/index.js";
@@ -42,7 +43,20 @@ export function createServer(): Server {
     const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     const tool = allTools[name];
+    const { agent_id, session_id, loggableArgs } = extractMeta(args);
+    const startTime = Date.now();
+
     if (!tool) {
+      writeAuditLog({
+        tool_name: name,
+        input: loggableArgs,
+        agent_id,
+        session_id,
+        timestamp: new Date(startTime).toISOString(),
+        duration_ms: Date.now() - startTime,
+        success: false,
+        error_code: "UNKNOWN_TOOL"
+      });
       return {
         content: [
           {
@@ -62,12 +76,33 @@ export function createServer(): Server {
 
     try {
       const result = await tool.handler(args);
+      writeAuditLog({
+        tool_name: name,
+        input: loggableArgs,
+        agent_id,
+        session_id,
+        timestamp: new Date(startTime).toISOString(),
+        duration_ms: Date.now() - startTime,
+        success: true,
+        error_code: null
+      });
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        content: [{ type: "text", text: JSON.stringify(result, (_k, v) => typeof v === "bigint" ? v.toString() : v, 2) }]
       };
     } catch (error) {
+      const errorPayload = toErrorPayload(error);
+      writeAuditLog({
+        tool_name: name,
+        input: loggableArgs,
+        agent_id,
+        session_id,
+        timestamp: new Date(startTime).toISOString(),
+        duration_ms: Date.now() - startTime,
+        success: false,
+        error_code: errorPayload.code ?? "INTERNAL_ERROR"
+      });
       return {
-        content: [{ type: "text", text: JSON.stringify(toErrorPayload(error)) }],
+        content: [{ type: "text", text: JSON.stringify(errorPayload) }],
         isError: true
       };
     }

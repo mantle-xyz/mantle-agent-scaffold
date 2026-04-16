@@ -51,6 +51,54 @@ export function parseJsonArray(value: string, fieldName: string): unknown[] {
   }
 }
 
+/**
+ * Parse a JSON-style array of integer literals while preserving BigInt
+ * precision. Returns each element as a digit string so that callers can
+ * safely do `BigInt(item)` without the IEEE-754 rounding that `JSON.parse`
+ * would otherwise introduce for values above `Number.MAX_SAFE_INTEGER`.
+ *
+ * Used for inputs like LB-token `--amounts` in `lp remove`, where values
+ * are commonly 10^17+ and would be silently corrupted by a plain
+ * `JSON.parse`.
+ */
+export function parseBigIntArray(value: string, fieldName: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    throw new MantleMcpError(
+      "INVALID_INPUT",
+      `${fieldName} must be a JSON array of integers.`,
+      `Provide ${fieldName} as '[123, 456]'.`,
+      { field: fieldName, value }
+    );
+  }
+  const inner = trimmed.slice(1, -1).trim();
+  if (inner === "") return [];
+  const parts = inner.split(",").map((p) => p.trim()).filter((p) => p.length > 0);
+  for (const p of parts) {
+    // Allow optional surrounding quotes so `["123", "456"]` also works.
+    const unquoted =
+      (p.startsWith('"') && p.endsWith('"')) ||
+      (p.startsWith("'") && p.endsWith("'"))
+        ? p.slice(1, -1)
+        : p;
+    if (!/^-?\d+$/.test(unquoted)) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        `${fieldName} must be a JSON array of integers (got non-integer element '${p}').`,
+        `Each element of ${fieldName} must be an integer literal.`,
+        { field: fieldName, value }
+      );
+    }
+  }
+  // Strip any surrounding quotes in the returned digit strings.
+  return parts.map((p) =>
+    (p.startsWith('"') && p.endsWith('"')) ||
+    (p.startsWith("'") && p.endsWith("'"))
+      ? p.slice(1, -1)
+      : p
+  );
+}
+
 export function parseIntegerOption(value: string, optionName: string): number {
   const trimmed = value.trim();
   if (!/^-?\d+$/.test(trimmed)) {

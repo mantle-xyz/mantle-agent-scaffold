@@ -2863,6 +2863,65 @@ export async function buildRemoveLiquidity(
     ]
   });
 
+  // Best-effort pre-flight: verify the router is approved to burn the user's
+  // LB shares. Without this, the tx will revert with LBToken__SpenderNotApproved.
+  // We surface it as a prominent warning (or skip-hint) rather than hard-failing,
+  // so off-chain flows that set approval atomically can still build the tx.
+  const warnings: string[] = [
+    "amountXMin and amountYMin are 0. Consider setting minimum outputs to avoid MEV."
+  ];
+  try {
+    const factoryAddr = getContractAddress(
+      "merchant_moe",
+      "lb_factory_v2_2",
+      network
+    ) as `0x${string}`;
+    const client = d.getClient(network);
+    const pairInfo = (await client.readContract({
+      address: factoryAddr,
+      abi: LB_FACTORY_ABI,
+      functionName: "getLBPairInformation",
+      args: [
+        tokenA.address as `0x${string}`,
+        tokenB.address as `0x${string}`,
+        BigInt(binStep)
+      ]
+    })) as {
+      binStep: number;
+      LBPair: string;
+      createdByOwner: boolean;
+      ignoredForRouting: boolean;
+    };
+    if (
+      pairInfo?.LBPair &&
+      pairInfo.LBPair !== "0x0000000000000000000000000000000000000000"
+    ) {
+      const isApproved = (await client.readContract({
+        address: pairInfo.LBPair as `0x${string}`,
+        abi: LB_PAIR_ABI,
+        functionName: "isApprovedForAll",
+        args: [
+          recipient as `0x${string}`,
+          routerAddress as `0x${string}`
+        ]
+      })) as boolean;
+      if (!isApproved) {
+        warnings.unshift(
+          `LB Router is NOT currently approved to burn your shares on pair ${pairInfo.LBPair}. ` +
+          `The removeLiquidity tx WILL revert until you broadcast a \`mantle_buildSetLBApprovalForAll\` ` +
+          `(CLI: \`lp approve-lb --pair ${pairInfo.LBPair} --operator ${routerAddress} --owner ${recipient}\`). ` +
+          `NOTE: this pre-check assumes recipient == owner; if the LB shares are held by a different address, approve from that address instead.`
+        );
+      }
+    }
+  } catch {
+    // Pre-check failure is non-critical (e.g. transient RPC error). Emit a
+    // conservative hint so the caller knows the approval is a prerequisite.
+    warnings.push(
+      "Could not verify LB operator approval on-chain. If the router is not approved for the share owner, the tx will revert — use `mantle_buildSetLBApprovalForAll` / `lp approve-lb` first."
+    );
+  }
+
   return {
     intent: "remove_liquidity",
     human_summary: `Remove liquidity on Merchant Moe LB: ${tokenX.symbol}/${tokenY.symbol} (${ids.length} bins, pair: ${pairAddr.slice(0, 10)}...)`,
@@ -2963,6 +3022,165 @@ function buildV3RemoveLiquidity(params: {
       "amount0Min and amount1Min are 0. Consider setting minimum outputs to avoid MEV."
     ],
     built_at_utc: now
+  };
+}
+
+// =========================================================================
+// Tool 6b: mantle_buildSetLBApprovalForAll
+//
+// Grants (or revokes) an operator — typically the LB Router — permission to
+// burn the user's LB-token (ERC-1155-ish) shares on a given LB Pair. This
+// is REQUIRED before `lp remove` can succeed on Merchant Moe: the router
+// internally calls `LBPair.burn(user, ...)`, and LBToken's `checkApproval`
+// modifier requires `isApprovedForAll(user, router) == true`.
+// =========================================================================
+
+export async function buildSetLBApprovalForAll(
+  args: Record<string, unknown>,
+  deps?: Partial<DefiWriteDeps>
+): Promise<UnsignedTxResult> {
+  const d = withDeps(deps);
+  const { network } = normalizeNetwork(args);
+
+  const operator = requireAddress(args.operator, "operator");
+  const approvedFlag = args.approved === undefined ? true : Boolean(args.approved);
+
+  // Only allow approving whitelisted protocol contracts (e.g. LB Router) —
+  // same safety stance as ERC-20 approve.
+  if (!isWhitelistedContract(operator, network)) {
+    throw new MantleMcpError(
+      "SPENDER_NOT_WHITELISTED",
+      `Operator ${operator} is not a whitelisted contract.`,
+      "Only whitelisted protocol contracts (e.g. the LB Router) can be approved as LB operators.",
+      { operator, network }
+    );
+  }
+
+  // Resolve the LB Pair address: either explicitly provided, or looked up
+  // via the LB Factory using (token_a, token_b, bin_step).
+  let pairAddress: string;
+  if (typeof args.pair === "string" && isAddress(args.pair, { strict: false })) {
+    pairAddress = getAddress(args.pair);
+  } else {
+    const tokenAInput = requireString(args.token_a, "token_a");
+    const tokenBInput = requireString(args.token_b, "token_b");
+    const tokenA = await resolveToken(d, tokenAInput, network);
+    const tokenB = await resolveToken(d, tokenBInput, network);
+
+    const binStepRaw = args.bin_step;
+    const binStep =
+      typeof binStepRaw === "number"
+        ? binStepRaw
+        : typeof binStepRaw === "string" && /^-?\d+$/.test(binStepRaw.trim())
+          ? Number(binStepRaw.trim())
+          : NaN;
+    if (!Number.isFinite(binStep)) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "bin_step must be an integer.",
+        "Provide bin_step as the LB pair bin step (e.g. 15, 25). Or pass 'pair' directly.",
+        { bin_step: args.bin_step }
+      );
+    }
+
+    const factoryAddr = getContractAddress(
+      "merchant_moe",
+      "lb_factory_v2_2",
+      network
+    ) as `0x${string}`;
+    const client = d.getClient(network);
+    const pairInfo = (await client.readContract({
+      address: factoryAddr,
+      abi: LB_FACTORY_ABI,
+      functionName: "getLBPairInformation",
+      args: [
+        tokenA.address as `0x${string}`,
+        tokenB.address as `0x${string}`,
+        BigInt(binStep)
+      ]
+    })) as {
+      binStep: number;
+      LBPair: string;
+      createdByOwner: boolean;
+      ignoredForRouting: boolean;
+    };
+
+    if (
+      !pairInfo?.LBPair ||
+      pairInfo.LBPair === "0x0000000000000000000000000000000000000000"
+    ) {
+      throw new MantleMcpError(
+        "PAIR_NOT_FOUND",
+        `No LB pair found for ${tokenA.symbol}/${tokenB.symbol} with bin_step=${binStep}.`,
+        "Verify the tokens and bin_step are correct, or pass 'pair' directly.",
+        {
+          token_a: tokenA.address,
+          token_b: tokenB.address,
+          bin_step: binStep
+        }
+      );
+    }
+    pairAddress = getAddress(pairInfo.LBPair);
+  }
+
+  // Pre-check existing approval state if owner provided. Short-circuit with
+  // intent='approve_skip' if already at the desired state.
+  const owner =
+    typeof args.owner === "string" && isAddress(args.owner, { strict: false })
+      ? getAddress(args.owner)
+      : null;
+  if (owner) {
+    try {
+      const client = d.getClient(network);
+      const already = (await client.readContract({
+        address: pairAddress as `0x${string}`,
+        abi: LB_PAIR_ABI,
+        functionName: "isApprovedForAll",
+        args: [owner as `0x${string}`, operator as `0x${string}`]
+      })) as boolean;
+      if (already === approvedFlag) {
+        return {
+          intent: "approve_skip",
+          human_summary: `SKIP: ${whitelistLabel(operator, network) ?? operator} is already ${approvedFlag ? "approved" : "revoked"} as LB operator on ${pairAddress}.`,
+          unsigned_tx: {
+            to: pairAddress,
+            data: "0x",
+            value: "0x0",
+            chainId: chainId(network)
+          },
+          warnings: [
+            `isApprovedForAll(${owner}, ${operator}) already returns ${already}. No transaction needed.`
+          ],
+          built_at_utc: d.now()
+        };
+      }
+    } catch {
+      // Pre-check failed (e.g. RPC hiccup) — proceed without skip.
+    }
+  }
+
+  const data = encodeFunctionData({
+    abi: LB_PAIR_ABI,
+    functionName: "approveForAll",
+    args: [operator as `0x${string}`, approvedFlag]
+  });
+
+  const opLabel = whitelistLabel(operator, network) ?? operator;
+  return {
+    intent: approvedFlag ? "approve_lb" : "approve_lb_revoke",
+    human_summary: `${approvedFlag ? "Approve" : "Revoke"} ${opLabel} as LB operator on pair ${pairAddress} (ERC-1155 share approval required to remove liquidity via the router).`,
+    unsigned_tx: {
+      to: pairAddress,
+      data,
+      value: "0x0",
+      chainId: chainId(network)
+    },
+    warnings: approvedFlag
+      ? [
+          "approveForAll grants the operator permission to burn ALL of your LB shares on this pair across every bin. Revoke with approved=false when you're done."
+        ]
+      : [],
+    built_at_utc: d.now()
   };
 }
 
@@ -4171,6 +4389,51 @@ export const defiWriteTools: Record<string, Tool> = {
       required: ["provider", "recipient"]
     },
     handler: wrapBuildHandler(buildRemoveLiquidity)
+  },
+
+  mantle_buildSetLBApprovalForAll: {
+    name: "mantle_buildSetLBApprovalForAll",
+    description:
+      "Build an unsigned `approveForAll` transaction on a Merchant Moe LB Pair (ERC-1155-style share approval). This is REQUIRED before `mantle_buildRemoveLiquidity` can succeed for merchant_moe: the router burns the user's LB shares via `LBPair.burn(user, ...)`, which requires `isApprovedForAll(user, router) == true`. Pair can be specified directly via 'pair', or resolved from 'token_a' + 'token_b' + 'bin_step' via the LB Factory. Pass 'owner' to auto-skip when the operator is already in the desired state (intent='approve_skip').\n\nExamples:\n- Approve LB Router to burn WMNT/USDT shares: token_a='WMNT', token_b='USDT', bin_step=15, operator='0x013e138EF6008ae5FDFDE29700e3f2Bc61d21E3a', owner='0xYourWallet'\n- Revoke: approved=false",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pair: {
+          type: "string",
+          description: "LB Pair contract address. If omitted, resolved from token_a/token_b/bin_step."
+        },
+        token_a: {
+          type: "string",
+          description: "First token symbol or address (alternative to 'pair')."
+        },
+        token_b: {
+          type: "string",
+          description: "Second token symbol or address (alternative to 'pair')."
+        },
+        bin_step: {
+          type: "number",
+          description: "LB pair bin step (alternative to 'pair'). E.g. 15, 25."
+        },
+        operator: {
+          type: "string",
+          description: "Address to approve/revoke (must be a whitelisted contract, typically the LB Router)."
+        },
+        approved: {
+          type: "boolean",
+          description: "true to grant approval, false to revoke. Defaults to true."
+        },
+        owner: {
+          type: "string",
+          description: "Wallet address that owns the LB shares. Used to pre-check isApprovedForAll and skip when the desired state is already set."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["operator"]
+    },
+    handler: wrapBuildHandler(buildSetLBApprovalForAll)
   },
 
   mantle_buildAaveSupply: {

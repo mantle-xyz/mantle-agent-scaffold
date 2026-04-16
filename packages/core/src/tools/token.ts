@@ -1,4 +1,5 @@
 import { formatUnits } from "viem";
+import { z } from "zod";
 import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
 import { ERC20_ABI } from "../lib/abis/erc20.js";
@@ -28,6 +29,38 @@ interface TokenDeps {
 
 const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
 const DEFILLAMA_PRICES_API_BASE = "https://coins.llama.fi/prices/current";
+
+/* ------------------------------------------------------------------ */
+/*  Zod schemas for external API responses                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * DexScreener /tokens/v1/:chain/:address returns an array of pair objects.
+ * priceUsd is optional/nullable: DexScreener returns it as a string ("1.23"),
+ * and illiquid pairs may omit it — null is the intended degraded path via
+ * asFiniteNumber().
+ */
+const DexScreenerPairSchema = z.object({
+  priceUsd: z
+    .union([z.string(), z.number()])
+    .optional()
+    .nullable()
+});
+
+const DexScreenerResponseSchema = z.array(DexScreenerPairSchema).min(1);
+
+/** DefiLlama /prices/current/:coins returns { coins: { "chain:address": { price } } }. */
+const DefiLlamaTokenPriceSchema = z.object({
+  price: z
+    .number()
+    .finite()
+    .optional()
+    .nullable()
+});
+
+const DefiLlamaResponseSchema = z.object({
+  coins: z.record(z.string(), DefiLlamaTokenPriceSchema)
+});
 
 const defaultDeps: TokenDeps = {
   getClient: getPublicClient,
@@ -125,12 +158,13 @@ async function fetchDexScreenerTokenPriceUsd(
   const payload = await fetchJsonSafe(
     `${DEXSCREENER_API_BASE}/tokens/v1/${chainId}/${tokenAddress}`
   );
-  if (!Array.isArray(payload) || payload.length === 0) {
+
+  const parsed = DexScreenerResponseSchema.safeParse(payload);
+  if (!parsed.success) {
     return null;
   }
 
-  const first = payload[0] as { priceUsd?: number | string };
-  return asFiniteNumber(first?.priceUsd);
+  return asFiniteNumber(parsed.data[0].priceUsd);
 }
 
 async function fetchDefiLlamaTokenPrices(
@@ -145,11 +179,13 @@ async function fetchDefiLlamaTokenPrices(
   const unique = [...new Set(tokenAddresses.map((address) => address.toLowerCase()))];
   const coins = unique.map((address) => `${chainId}:${address}`).join(",");
   const payload = await fetchJsonSafe(`${DEFILLAMA_PRICES_API_BASE}/${coins}`);
-  const record =
-    payload && typeof payload === "object" && payload.coins && typeof payload.coins === "object"
-      ? (payload.coins as Record<string, { price?: number | string }>)
-      : {};
 
+  const parsed = DefiLlamaResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    return {};
+  }
+
+  const record = parsed.data.coins;
   const out: Record<string, number | null> = {};
   for (const address of unique) {
     const key = `${chainId}:${address}`;
