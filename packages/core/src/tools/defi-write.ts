@@ -2867,37 +2867,13 @@ export async function buildRemoveLiquidity(
   // LB shares. Without this, the tx will revert with LBToken__SpenderNotApproved.
   // We surface it as a prominent warning (or skip-hint) rather than hard-failing,
   // so off-chain flows that set approval atomically can still build the tx.
-  const warnings: string[] = [
-    "amountXMin and amountYMin are 0. Consider setting minimum outputs to avoid MEV."
-  ];
   try {
-    const factoryAddr = getContractAddress(
-      "merchant_moe",
-      "lb_factory_v2_2",
-      network
-    ) as `0x${string}`;
-    const client = d.getClient(network);
-    const pairInfo = (await client.readContract({
-      address: factoryAddr,
-      abi: LB_FACTORY_ABI,
-      functionName: "getLBPairInformation",
-      args: [
-        tokenA.address as `0x${string}`,
-        tokenB.address as `0x${string}`,
-        BigInt(binStep)
-      ]
-    })) as {
-      binStep: number;
-      LBPair: string;
-      createdByOwner: boolean;
-      ignoredForRouting: boolean;
-    };
     if (
-      pairInfo?.LBPair &&
-      pairInfo.LBPair !== "0x0000000000000000000000000000000000000000"
+      pairAddr &&
+      pairAddr !== "0x0000000000000000000000000000000000000000"
     ) {
       const isApproved = (await client.readContract({
-        address: pairInfo.LBPair as `0x${string}`,
+        address: pairAddr as `0x${string}`,
         abi: LB_PAIR_ABI,
         functionName: "isApprovedForAll",
         args: [
@@ -2907,9 +2883,9 @@ export async function buildRemoveLiquidity(
       })) as boolean;
       if (!isApproved) {
         warnings.unshift(
-          `LB Router is NOT currently approved to burn your shares on pair ${pairInfo.LBPair}. ` +
+          `LB Router is NOT currently approved to burn your shares on pair ${pairAddr}. ` +
           `The removeLiquidity tx WILL revert until you broadcast a \`mantle_buildSetLBApprovalForAll\` ` +
-          `(CLI: \`lp approve-lb --pair ${pairInfo.LBPair} --operator ${routerAddress} --owner ${recipient}\`). ` +
+          `(CLI: \`lp approve-lb --pair ${pairAddr} --operator ${routerAddress} --owner ${recipient}\`). ` +
           `NOTE: this pre-check assumes recipient == owner; if the LB shares are held by a different address, approve from that address instead.`
         );
       }
