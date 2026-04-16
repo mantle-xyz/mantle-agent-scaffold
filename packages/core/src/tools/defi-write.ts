@@ -1712,7 +1712,10 @@ export async function buildAddLiquidity(
     if (provider === "agni" || provider === "fluxion") {
       const tickLower = effectiveTickLower;
       const tickUpper = effectiveTickUpper;
-      const isFullRange = tickLower === -887220 && tickUpper === 887220;
+      // tickSpacing-agnostic: any tick near the pool's MIN/MAX counts as full
+      // range (Uniswap vanilla is ±887220 at tickSpacing 60; Agni's fee-tier
+      // pools use ±887200 / ±887250 / ±887270 depending on spacing).
+      const isFullRange = tickLower <= -800000 && tickUpper >= 800000;
 
       if (!isFullRange) {
         // Derive the ratio from V3 math:
@@ -2045,11 +2048,142 @@ async function buildV3AddLiquidity(params: {
       ? [tokenA, tokenB, amountARaw, amountBRaw, amountADecimal, amountBDecimal]
       : [tokenB, tokenA, amountBRaw, amountARaw, amountBDecimal, amountADecimal];
 
-  // Apply slippage to minimums
-  const amount0Min =
-    (amount0Desired * BigInt(10000 - slippageBps)) / 10000n;
-  const amount1Min =
-    (amount1Desired * BigInt(10000 - slippageBps)) / 10000n;
+  const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
+  const warnings: string[] = [];
+  const swLp = sepoliaWarning(network);
+  if (swLp) warnings.push(swLp);
+
+  // Pool-state-aware amountMin computation.
+  //
+  // V3 mint() pulls amounts proportional to L = min(L0, L1) at the current
+  // price, capped by the caller's (amount0Desired, amount1Desired). When the
+  // caller's amounts don't match the pool's ratio at the requested tick range,
+  // the un-binding side is under-consumed; an amountMin derived from
+  // `desired * (1 - slippage)` on that side reverts with "Price slippage
+  // check" every time.
+  //
+  // Fix: read slot0, compute the amounts the pool will ACTUALLY pull, and
+  // base amountMin on those. Desired stays as the caller's ceiling. If the
+  // RPC read fails, fall back to the legacy amountMin-from-desired path and
+  // emit a warning so the caller isn't silently unprotected.
+  let amount0MinBase = amount0Desired;
+  let amount1MinBase = amount1Desired;
+  let poolStateResolved = false;
+
+  try {
+    const client = getPublicClient(network);
+    const factoryAddress = getContractAddress(provider, "factory", network);
+    const poolAddr = await client.readContract({
+      address: factoryAddress as `0x${string}`,
+      abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
+      functionName: "getPool",
+      args: [token0.address as `0x${string}`, token1.address as `0x${string}`, feeTier]
+    }) as `0x${string}`;
+
+    if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+      const [slot0, tickSpacingRaw] = await Promise.all([
+        client.readContract({
+          address: poolAddr,
+          abi: [{ type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ name: "sqrtPriceX96", type: "uint160" }, { name: "tick", type: "int24" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint8" }, { name: "", type: "bool" }] }] as const,
+          functionName: "slot0"
+        }) as Promise<readonly [bigint, number, ...unknown[]]>,
+        client.readContract({
+          address: poolAddr,
+          abi: [{ type: "function", name: "tickSpacing", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "int24" }] }] as const,
+          functionName: "tickSpacing"
+        }) as Promise<number>
+      ]);
+
+      const sqrtPriceX96 = slot0[0];
+      const currentTick = slot0[1];
+      const tickSpacing = Number(tickSpacingRaw);
+
+      // Full-range detection is tickSpacing-aware: each pool caps usable ticks
+      // at Math.floor(MAX_TICK / tickSpacing) * tickSpacing, not the Uniswap
+      // vanilla -887220/887220.
+      const MAX_TICK = 887272;
+      const maxUsable = Math.floor(MAX_TICK / tickSpacing) * tickSpacing;
+      if (tickLower === -maxUsable && tickUpper === maxUsable) {
+        warnings.push(
+          "Using full-range tick bounds (MIN_TICK to MAX_TICK). Consider narrower range for concentrated liquidity."
+        );
+      }
+
+      if (currentTick < tickLower || currentTick >= tickUpper) {
+        warnings.push(
+          `OUT-OF-RANGE WARNING: Current pool tick is ${currentTick}, but your range is [${tickLower}, ${tickUpper}]. ` +
+          `This position will NOT earn any trading fees until the price moves into your range. ` +
+          `Consider using mantle-cli lp suggest-ticks to get recommended tick ranges.`
+        );
+      }
+
+      // V3 price math in float. sqrtP = sqrtPriceX96 / 2^96;
+      // sqrtPLower/Upper = sqrt(1.0001 ^ tick) = 1.0001 ^ (tick/2).
+      const sqrtP = Number(sqrtPriceX96) / 2 ** 96;
+      const sqrtPLower = Math.pow(1.0001, tickLower / 2);
+      const sqrtPUpper = Math.pow(1.0001, tickUpper / 2);
+      const sqrtPClamped = Math.max(sqrtPLower, Math.min(sqrtPUpper, sqrtP));
+
+      // Per-unit-liquidity amounts for (sqrtPClamped, sqrtPLower, sqrtPUpper).
+      // Collapses below/within/above-range cases.
+      const perL0 = sqrtPClamped <= sqrtPLower
+        ? (1 / sqrtPLower) - (1 / sqrtPUpper)
+        : (1 / sqrtPClamped) - (1 / sqrtPUpper);
+      const perL1 = sqrtPClamped >= sqrtPUpper
+        ? sqrtPUpper - sqrtPLower
+        : sqrtPClamped - sqrtPLower;
+
+      const amount0Num = Number(amount0Desired);
+      const amount1Num = Number(amount1Desired);
+      const L0 = perL0 > 0 ? amount0Num / perL0 : Infinity;
+      const L1 = perL1 > 0 ? amount1Num / perL1 : Infinity;
+      const L = Math.min(L0, L1);
+
+      const expAmount0 = BigInt(Math.max(0, Math.floor(L * perL0)));
+      const expAmount1 = BigInt(Math.max(0, Math.floor(L * perL1)));
+
+      // Imbalance warning (>1% un-consumed on either side). The excess is NOT
+      // lost — it stays in the caller's wallet — but it signals that amounts
+      // were not sized for this pool's current ratio.
+      const imbalanceThresholdBps = 100n;
+      const isImbalanced =
+        (amount0Desired > 0n &&
+          expAmount0 * 10000n < amount0Desired * (10000n - imbalanceThresholdBps)) ||
+        (amount1Desired > 0n &&
+          expAmount1 * 10000n < amount1Desired * (10000n - imbalanceThresholdBps));
+      if (isImbalanced) {
+        const exp0Dec = formatUnits(expAmount0, token0.decimals);
+        const exp1Dec = formatUnits(expAmount1, token1.decimals);
+        warnings.push(
+          `UNBALANCED amounts for current pool price: supplied ` +
+          `${amt0Label} ${token0.symbol} + ${amt1Label} ${token1.symbol}, but only ` +
+          `~${exp0Dec} ${token0.symbol} + ~${exp1Dec} ${token1.symbol} will be minted ` +
+          `at the current tick (${currentTick}) within [${tickLower}, ${tickUpper}]. ` +
+          `The excess stays in your wallet; consider adjusting amounts to match the ` +
+          `pool ratio for better capital efficiency.`
+        );
+      }
+
+      // amountMin is derived from the expected actual pull, not from desired —
+      // this is what lets imbalanced inputs pass the on-chain slippage check.
+      amount0MinBase = expAmount0;
+      amount1MinBase = expAmount1;
+      poolStateResolved = true;
+    }
+  } catch {
+    // Non-critical — fall back to legacy amountMin-from-desired below.
+  }
+
+  if (!poolStateResolved) {
+    warnings.push(
+      "Could not read pool state to balance amounts — falling back to amountMin " +
+      "derived from desired amounts. If desired amounts don't match the pool's " +
+      "current price/tick ratio, mint() may revert with 'Price slippage check'."
+    );
+  }
+
+  const amount0Min = (amount0MinBase * BigInt(10000 - slippageBps)) / 10000n;
+  const amount1Min = (amount1MinBase * BigInt(10000 - slippageBps)) / 10000n;
 
   const data = encodeFunctionData({
     abi: V3_POSITION_MANAGER_ABI,
@@ -2070,47 +2204,6 @@ async function buildV3AddLiquidity(params: {
       }
     ]
   });
-
-  const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
-  const warnings: string[] = [];
-  const swLp = sepoliaWarning(network);
-  if (swLp) warnings.push(swLp);
-  if (tickLower === -887220 && tickUpper === 887220) {
-    warnings.push(
-      "Using full-range tick bounds (MIN_TICK to MAX_TICK). Consider narrower range for concentrated liquidity."
-    );
-  }
-
-  // Check if tick range includes current pool price
-  try {
-    const client = getPublicClient(network);
-    const factoryAddress = getContractAddress(provider, "factory", network);
-    const poolAddr = await client.readContract({
-      address: factoryAddress as `0x${string}`,
-      abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
-      functionName: "getPool",
-      args: [token0.address as `0x${string}`, token1.address as `0x${string}`, feeTier]
-    }) as `0x${string}`;
-
-    if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
-      const slot0 = await client.readContract({
-        address: poolAddr,
-        abi: [{ type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ name: "sqrtPriceX96", type: "uint160" }, { name: "tick", type: "int24" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint8" }, { name: "", type: "bool" }] }] as const,
-        functionName: "slot0"
-      }) as readonly [bigint, number, ...unknown[]];
-
-      const currentTick = slot0[1];
-      if (currentTick < tickLower || currentTick >= tickUpper) {
-        warnings.push(
-          `OUT-OF-RANGE WARNING: Current pool tick is ${currentTick}, but your range is [${tickLower}, ${tickUpper}]. ` +
-          `This position will NOT earn any trading fees until the price moves into your range. ` +
-          `Consider using mantle-cli lp suggest-ticks to get recommended tick ranges.`
-        );
-      }
-    }
-  } catch {
-    // Non-critical — proceed without tick check
-  }
 
   return {
     intent: "add_liquidity",
@@ -4305,7 +4398,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildCollectFees: {
     name: "mantle_buildCollectFees",
     description:
-      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id from a block explorer (Mantlescan), https://agni.finance, or the unsigned_tx response of a prior mantle_buildAddLiquidity call (mantle_getV3Positions is currently disabled — see the capability catalog).\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'\n\nNOTE: Merchant Moe LB fees are embedded in bin reserves and collected automatically when removing liquidity via mantle_buildRemoveLiquidity. This tool only supports V3 positions (Agni/Fluxion).",
+      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id — call mantle_getV3Positions to enumerate, look it up on a block explorer (Mantlescan) / https://agni.finance, or read it from the unsigned_tx response of a prior mantle_buildAddLiquidity call.\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'\n\nNOTE: Merchant Moe LB fees are embedded in bin reserves and collected automatically when removing liquidity via mantle_buildRemoveLiquidity. This tool only supports V3 positions (Agni/Fluxion).",
     inputSchema: {
       type: "object",
       properties: {
