@@ -529,18 +529,11 @@ function wrapBuildHandler(
               "GAS_ESTIMATION_FAILED",
               `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`,
               "The transaction may revert on-chain. Check that the sender has sufficient balance " +
-                "and that the calldata/target are correct.",
+                "and that the calldata/target are correct. Do NOT submit without a valid gas estimate.",
               {
                 to: result.unsigned_tx.to,
                 sender: sender ?? null,
                 intent: result.intent ?? null,
-              },
-              {
-                doNot: [
-                  "DO NOT submit a transaction without a valid gas estimate",
-                  "DO NOT hardcode a gas limit as a workaround"
-                ],
-                retryable: true
               }
             );
           }

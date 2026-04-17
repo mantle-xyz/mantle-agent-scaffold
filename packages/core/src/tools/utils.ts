@@ -116,14 +116,6 @@ function rejectTransferToProtocol(calldata: string, toAddress?: string): void {
         recipient: recipientHex,
         recipient_label: label,
         ...(toAddress ? { token_contract: toAddress } : {})
-      },
-      {
-        doNot: [
-          "DO NOT use encodeCall or buildRawTx to construct ERC-20 transfers to protocol contracts",
-          "DO NOT attempt to bypass this safety check",
-          "DO NOT fabricate an alternative transfer method"
-        ],
-        retryable: false
       }
     );
   }
@@ -148,13 +140,8 @@ async function parseUnitsHandler(
     throw new MantleMcpError(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
-      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC).",
-      { decimals },
-      {
-        requiresUserInput: true,
-        questionForUser: "What is the correct number of decimals for this token?",
-        doNot: ["DO NOT guess token decimals"]
-      }
+      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC). Do NOT guess token decimals.",
+      { decimals }
     );
   }
 
@@ -172,11 +159,7 @@ async function parseUnitsHandler(
       "INVALID_INPUT",
       `Failed to parse '${amount}' with ${decimals} decimals: ${err.message}`,
       "Provide a valid decimal number (e.g. '100', '0.5', '1234.567890').",
-      { amount, decimals },
-      {
-        requiresUserInput: true,
-        questionForUser: `The amount '${amount}' could not be parsed. Please provide a valid decimal number.`
-      }
+      { amount, decimals }
     );
   }
 }
@@ -200,13 +183,8 @@ async function formatUnitsHandler(
     throw new MantleMcpError(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
-      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC).",
-      { decimals },
-      {
-        requiresUserInput: true,
-        questionForUser: "What is the correct number of decimals for this token?",
-        doNot: ["DO NOT guess token decimals"]
-      }
+      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC). Do NOT guess token decimals.",
+      { decimals }
     );
   }
 
@@ -224,11 +202,7 @@ async function formatUnitsHandler(
       "INVALID_INPUT",
       `Failed to format '${raw}' with ${decimals} decimals: ${err.message}`,
       "Provide a valid integer string (e.g. '1000000', '500000000000000000').",
-      { amount_raw: raw, decimals },
-      {
-        requiresUserInput: true,
-        questionForUser: `The raw amount '${raw}' could not be formatted. Please provide a valid integer string.`
-      }
+      { amount_raw: raw, decimals }
     );
   }
 }
@@ -262,11 +236,7 @@ async function encodeCallHandler(
       "INVALID_INPUT",
       `Failed to parse ABI: ${err.message}`,
       'Provide a valid ABI JSON array or human-readable signature like "function transfer(address to, uint256 amount) returns (bool)".',
-      { abi: abiInput },
-      {
-        requiresUserInput: true,
-        questionForUser: "The ABI could not be parsed. Please provide a valid ABI JSON array or human-readable function signature."
-      }
+      { abi: abiInput }
     );
   }
 
@@ -314,14 +284,9 @@ async function encodeCallHandler(
     throw new MantleMcpError(
       "ENCODING_FAILED",
       `Failed to encode function call: ${err.message}`,
-      "Check that the function name exists in the ABI and the args match the expected types.",
-      { function_name: functionName, args: functionArgs },
-      {
-        doNot: [
-          "DO NOT manually construct calldata hex",
-          "DO NOT guess function argument encoding"
-        ]
-      }
+      "Check that the function name exists in the ABI and the args match the expected types. " +
+        "Do NOT manually construct calldata hex or guess function argument encoding.",
+      { function_name: functionName, args: functionArgs }
     );
   }
 }
@@ -338,13 +303,9 @@ async function buildRawTxHandler(
     throw new MantleMcpError(
       "INVALID_ADDRESS",
       `'to' must be a valid Ethereum address, got: ${toRaw}`,
-      "Provide a checksummed or lowercase 0x-prefixed 40-hex-character address.",
-      { field: "to", value: toRaw },
-      {
-        requiresUserInput: true,
-        questionForUser: "Please provide a valid Ethereum address for the 'to' field.",
-        doNot: ["DO NOT guess or fabricate contract addresses"]
-      }
+      "Provide a checksummed or lowercase 0x-prefixed 40-hex-character address. " +
+        "Do NOT guess or fabricate contract addresses.",
+      { field: "to", value: toRaw }
     );
   }
   const to = getAddress(toRaw);
