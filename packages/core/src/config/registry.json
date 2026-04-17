@@ -19,7 +19,7 @@
       "aliases": ["Wrapped MNT"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -33,7 +33,7 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -47,7 +47,7 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -61,35 +61,35 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
-      "key": "METH",
+      "key": "mETH",
       "label": "Mantle Staked ETH",
       "environment": "mainnet",
       "category": "token",
       "address": "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
       "status": "active",
       "is_official": true,
-      "aliases": ["mETH"],
+      "aliases": ["METH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
-      "key": "CMETH",
+      "key": "cmETH",
       "label": "Restaked mETH",
       "environment": "mainnet",
       "category": "token",
       "address": "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA",
       "status": "active",
       "is_official": true,
-      "aliases": ["cmETH"],
+      "aliases": ["CMETH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -103,7 +103,7 @@
       "aliases": ["Agni Swap Router"],
       "source": {
         "url": "https://agni.finance",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -117,7 +117,7 @@
       "aliases": ["Merchant Moe Router", "MoeRouter"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -131,7 +131,7 @@
       "aliases": ["LB Router", "Liquidity Book Router"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -145,7 +145,7 @@
       "aliases": ["Aave Pool"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -159,7 +159,7 @@
       "aliases": ["Aave Data Provider"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -173,7 +173,63 @@
       "aliases": ["Aave Addresses Provider"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
+      }
+    },
+    {
+      "key": "AAVE_V3_WETH_GATEWAY",
+      "label": "Aave V3 WETH Gateway",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x9C6cCAC66b1c9AbA4855e2dD284b9e16e41E06eA",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Aave WETHGateway"],
+      "source": {
+        "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
+        "retrieved_at": "2026-04-15T00:00:00Z"
+      }
+    },
+    {
+      "key": "AAVE_V3_ORACLE",
+      "label": "Aave V3 Price Oracle",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x47a063CfDa980532267970d478EC340C0F80E8df",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Aave Oracle"],
+      "source": {
+        "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
+        "retrieved_at": "2026-04-15T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_SWAP_ROUTER",
+      "label": "Fluxion Swap Router",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x5628a59df0ecac3f3171f877a94beb26ba6dfaa0",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Fluxion Router"],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-15T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_POSITION_MANAGER",
+      "label": "Fluxion Position Manager",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x2b70c4e7ca8e920435a5db191e066e9e3afd8db3",
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -187,7 +243,7 @@
       "aliases": ["Standard Bridge L2"],
       "source": {
         "url": "https://docs.mantle.xyz/network/system-information/off-chain-system/key-l2-contract-address",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -201,7 +257,7 @@
       "aliases": ["Wrapped MNT Sepolia"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     }
   ]

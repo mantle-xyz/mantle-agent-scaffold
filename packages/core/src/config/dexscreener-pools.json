@@ -371,7 +371,7 @@
       "pool": "0x782bd3895a6Ac561d0DF11B02DD6f9E023F3a497",
       "baseToken": {
         "symbol": "wMETAx",
-        "address": "0x4e41a262caa93c6575d336e0a4eb850679da5322e14ce06"
+        "address": "0x4e41a262caa93c6575d336e0a4eb79f3c67caa06"
       },
       "quoteToken": {
         "symbol": "USDC",
@@ -379,7 +379,7 @@
       },
       "feeTier": 3000,
       "liquidityUsd": 109243,
-      "_note": "wMETAx address: 0x4e41a262caa93c6575d336e0a4eb850679da5322e14ce06 — from DexScreener; see XSTOCKS in dex-pairs.ts for canonical"
+      "_note": "wMETAx address: 0x4e41a262caa93c6575d336e0a4eb79f3c67caa06 — from DexScreener; see XSTOCKS in dex-pairs.ts for canonical"
     },
     {
       "provider": "fluxion",
