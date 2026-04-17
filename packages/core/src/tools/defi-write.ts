@@ -717,7 +717,11 @@ export async function buildWrapMnt(
   if (wrapSender) {
     try {
       const client = d.getClient(network);
-      await checkNativeBalance(client, amountRaw, wrapSender);
+      // Add a gas buffer: deposit() costs ~20k–30k gas. At 50k gas × 20 Gwei = 0.001 MNT
+      // safety margin so a wallet with exactly `amount` MNT doesn't pass preflight
+      // and then fail on broadcast with "insufficient funds for gas * price + value".
+      const GAS_BUFFER_MNT = 50_000n * 20_000_000_000n;
+      await checkNativeBalance(client, amountRaw + GAS_BUFFER_MNT, wrapSender);
     } catch (err) {
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
       wrapWarnings.push("Could not verify MNT balance (RPC error). Proceeding without balance check.");
@@ -1196,6 +1200,7 @@ export async function buildSwap(
       await checkErc20Balance(client, tokenIn, amountInRaw, swapOwner);
     } catch (err) {
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      swapWarnings.push(`Could not verify ${tokenIn.symbol} balance (RPC error). Proceeding without balance check.`);
     }
   }
 
@@ -2014,21 +2019,21 @@ export async function buildAddLiquidity(
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
     }
     // ── Balance pre-check (blocking) ─────────────────────────────────
-    try {
-      const client = d.getClient(network);
-      const balSettled = await Promise.allSettled([
-        checkErc20Balance(client, tokenA, amountARaw, lpOwner),
-        checkErc20Balance(client, tokenB, amountBRaw, lpOwner)
-      ]);
-      for (const result of balSettled) {
-        if (result.status === "rejected") {
-          const err = result.reason;
-          if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
-          // RPC failure — swallow
-        }
+    const client = d.getClient(network);
+    const balTokens = [
+      { sym: tokenA.symbol, check: checkErc20Balance(client, tokenA, amountARaw, lpOwner) },
+      { sym: tokenB.symbol, check: checkErc20Balance(client, tokenB, amountBRaw, lpOwner) }
+    ];
+    const balSettled = await Promise.allSettled(balTokens.map(t => t.check));
+    for (let i = 0; i < balSettled.length; i++) {
+      const result = balSettled[i];
+      if (result.status === "rejected") {
+        const err = result.reason;
+        if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+        warnings.push(
+          `Could not verify ${balTokens[i].sym} balance (RPC error). Proceeding without balance check — the tx may revert if balance is insufficient.`
+        );
       }
-    } catch (err) {
-      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
     }
   }
 
@@ -3310,12 +3315,18 @@ export async function buildAaveSupply(
   const poolAddress = getContractAddress("aave_v3", "pool", network);
   const amountDecimal = formatUnits(amountRaw, asset.decimals);
 
+  // Declare warnings early so the balance-check catch block can push to it.
+  const warnings: string[] = [
+    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
+  ];
+
   // ── Balance pre-check (blocking) ─────────────────────────────────────────
   try {
     const client = d.getClient(network);
     await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
   } catch (err) {
     if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    warnings.push(`Could not verify ${reserve.symbol} balance (RPC error). Proceeding without balance check.`);
   }
 
   const data = encodeFunctionData({
@@ -3328,10 +3339,6 @@ export async function buildAaveSupply(
       0 // referralCode
     ]
   });
-
-  const warnings: string[] = [
-    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
-  ];
 
   // ── Isolation Mode warning (includes collateral check guidance) ─────
   if (reserve.isolationMode) {
@@ -3572,12 +3579,18 @@ export async function buildAaveRepay(
 
   const poolAddress = getContractAddress("aave_v3", "pool", network);
 
+  // Declare warnings early so the balance-check catch block can push to it.
+  const repayWarnings: string[] = [
+    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before repaying.`
+  ];
+
   // ── Balance pre-check (blocking) — skipped when amount='max' (MAX_UINT256) ─
   try {
     const client = d.getClient(network);
     await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
   } catch (err) {
     if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    repayWarnings.push(`Could not verify ${reserve.symbol} balance (RPC error). Proceeding without balance check.`);
   }
 
   const data = encodeFunctionData({
@@ -3601,9 +3614,7 @@ export async function buildAaveRepay(
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [
-      `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before repaying.`
-    ],
+    warnings: repayWarnings,
     aave_reserve: {
       symbol: reserve.symbol,
       underlying: reserve.underlying,
@@ -3643,18 +3654,25 @@ export async function buildAaveWithdraw(
   const poolAddress = getContractAddress("aave_v3", "pool", network);
 
   // ── aToken balance pre-check (blocking) — skipped when amount='max' ──────
-  // The wallet must hold enough aTokens to redeem. aToken decimals match the
-  // underlying reserve (e.g. aUSDC has 6 decimals like USDC).
-  try {
-    const client = d.getClient(network);
-    await checkErc20Balance(
-      client,
-      { address: reserve.aToken, symbol: `a${reserve.symbol}`, decimals: reserve.decimals },
-      amountRaw,
-      to
-    );
-  } catch (err) {
-    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+  // In Aave V3 withdraw(asset, amount, to), the CALLER's (msg.sender's) aTokens
+  // are burned, not `to`'s. `to` is only the recipient of the underlying tokens.
+  // We check the signer's aToken balance via the optional `owner` param.
+  // When `owner` is omitted the check is skipped (no false positives on `to`).
+  const withdrawOwner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
+    ? getAddress(args.owner)
+    : null;
+  if (withdrawOwner) {
+    try {
+      const client = d.getClient(network);
+      await checkErc20Balance(
+        client,
+        { address: reserve.aToken, symbol: `a${reserve.symbol}`, decimals: reserve.decimals },
+        amountRaw,
+        withdrawOwner
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    }
   }
 
   const data = encodeFunctionData({

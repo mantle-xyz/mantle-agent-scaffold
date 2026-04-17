@@ -405,6 +405,40 @@ describe("buildSwap INSUFFICIENT_BALANCE throw path", () => {
       expect(meta.current_balance).toBe("0");
     }
   });
+
+  it("does NOT throw INSUFFICIENT_BALANCE when owner is omitted (balance check skipped)", async () => {
+    // Guard condition: balance check is gated by `if (swapOwner)`. When owner is absent,
+    // the check must not fire — even if balanceOf would return 0 — to avoid false blocks.
+    let sawBalanceError = false;
+    try {
+      await buildSwap(
+        {
+          provider: "agni",
+          token_in: "USDC",
+          token_out: "USDT",
+          amount_in: "100",
+          amount_out_min: "99000000",
+          recipient: RECIPIENT,
+          // owner intentionally omitted
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async () => 0n  // balanceOf = 0, allowance = 0 — both skipped without owner
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawBalanceError = true;
+      }
+    }
+    expect(sawBalanceError).toBe(false);
+  });
 });
 
 describe("buildWrapMnt INSUFFICIENT_BALANCE throw path", () => {
@@ -427,7 +461,8 @@ describe("buildWrapMnt INSUFFICIENT_BALANCE throw path", () => {
       const meta = e.details as Record<string, unknown>;
       expect(meta.token).toBe("MNT");
       expect(meta.owner).toBe(OWNER);
-      expect(meta.required).toBe("10");
+      // required = amount + gas buffer (50k gas @ 20 Gwei = 0.001 MNT)
+      expect(meta.required).toBe("10.001");
       expect(meta.current_balance).toBe("0");
     }
   });
@@ -504,9 +539,55 @@ describe("buildAddLiquidity INSUFFICIENT_BALANCE throw path", () => {
       expect(meta.current_balance).toBe("0");
     }
   });
-});
 
-// Aave reserve lookups are from the static config (no mock needed for those).
+  it("throws INSUFFICIENT_BALANCE for tokenB (WMNT) when tokenA balance is sufficient but tokenB is zero", async () => {
+    // Regression for F-5: the Promise.allSettled loop iterates by index — a bug
+    // that only checked index 0 (tokenA) would pass the tokenA test but miss tokenB.
+    const FAKE_LB_PAIR_B = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    try {
+      await buildAddLiquidity(
+        {
+          provider: "merchant_moe",
+          token_a: "USDC",
+          token_b: "WMNT",
+          amount_a: "1000",
+          amount_b: "1",
+          recipient: RECIPIENT,
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: FAKE_LB_PAIR_B, createdByOwner: false, ignoredForRouting: false };
+              }
+              if (functionName === "getActiveId") return 8388608;
+              if (functionName === "getTokenX") return USDC_MAINNET.address;
+              if (functionName === "allowance") return 10n ** 36n;            // always sufficient
+              // balanceOf: USDC = plenty, WMNT = 0 (insufficient)
+              if (functionName === "balanceOf" && address.toLowerCase() === WMNT_MAINNET.address.toLowerCase()) return 0n;
+              return 1_000_000_000_000_000_000_000_000n; // USDC plenty
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAddLiquidity to throw for tokenB");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("WMNT");
+      expect(meta.required).toBe("1");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
 // USDC reserve: underlying=0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9,
 //               aToken=0xcb8164415274515867ec43CbD284ab5d6d2b304F, decimals=6
 
@@ -585,12 +666,13 @@ describe("buildAaveRepay INSUFFICIENT_BALANCE throw path", () => {
 });
 
 describe("buildAaveWithdraw INSUFFICIENT_BALANCE throw path", () => {
-  it("throws INSUFFICIENT_BALANCE when aToken balance < amount", async () => {
+  it("throws INSUFFICIENT_BALANCE when owner aToken balance < amount", async () => {
     // aToken for USDC on Mantle: 0xcb8164415274515867ec43CbD284ab5d6d2b304F
     const AUSDC = "0xcb8164415274515867ec43CbD284ab5d6d2b304F";
     try {
       await buildAaveWithdraw(
-        { asset: "USDC", amount: "100", to: OWNER, network: "mainnet" },
+        // owner = signer; to = destination of underlying (same address here)
+        { asset: "USDC", amount: "100", to: OWNER, owner: OWNER, network: "mainnet" },
         {
           resolveTokenInput: async () => USDC_MAINNET,
           getClient: () => ({
@@ -617,11 +699,72 @@ describe("buildAaveWithdraw INSUFFICIENT_BALANCE throw path", () => {
     }
   });
 
+  it("does NOT throw when to≠signer and to has 0 aTokens but owner (signer) has sufficient", async () => {
+    // Regression test for MI-1: Aave withdraw(asset, amount, to) burns the CALLER's
+    // aTokens, not `to`'s. Checking `to`'s balance was wrong — we now check `owner`.
+    const COLD_WALLET = "0x3333333333333333333333333333333333333333";
+    const AUSDC = "0xcb8164415274515867ec43CbD284ab5d6d2b304F";
+    let sawBalanceError = false;
+    try {
+      await buildAaveWithdraw(
+        // to = cold wallet (0 aUSDC), owner = hot wallet (signer, has plenty of aUSDC)
+        { asset: "USDC", amount: "100", to: COLD_WALLET, owner: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          getClient: () => ({
+            readContract: async ({ address, args }: { address: string; args: [`0x${string}`, ...unknown[]] }) => {
+              // COLD_WALLET has 0 aTokens, OWNER has 1,000,000 (1 USDC = 1e6)
+              if (address.toLowerCase() === AUSDC.toLowerCase()) {
+                const balanceOfOwner = (args[0] as string).toLowerCase() === OWNER.toLowerCase()
+                  ? 1_000_000_000_000n  // 1,000,000 USDC (plenty)
+                  : 0n;                 // cold wallet has none
+                return balanceOfOwner;
+              }
+              return 1_000_000_000_000n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawBalanceError = true;
+      }
+    }
+    // The owner (signer) has plenty of aUSDC — should NOT block the withdraw
+    expect(sawBalanceError).toBe(false);
+  });
+
+  it("skips balance check when owner is omitted (no false INSUFFICIENT_BALANCE for unknown signer)", async () => {
+    let sawBalanceError = false;
+    try {
+      await buildAaveWithdraw(
+        // owner omitted — balance check is skipped entirely
+        { asset: "USDC", amount: "100", to: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          // readContract always returns 0n — check must be skipped when owner is absent
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawBalanceError = true;
+      }
+    }
+    expect(sawBalanceError).toBe(false);
+  });
+
   it("skips balance check when amount='max' (withdraws full aToken balance)", async () => {
     let sawBalanceError = false;
     try {
       await buildAaveWithdraw(
-        { asset: "USDC", amount: "max", to: OWNER, network: "mainnet" },
+        { asset: "USDC", amount: "max", to: OWNER, owner: OWNER, network: "mainnet" },
         {
           resolveTokenInput: async () => USDC_MAINNET,
           // readContract always returns 0n — but balance check must be skipped for max
