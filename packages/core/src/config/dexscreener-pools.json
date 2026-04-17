@@ -298,7 +298,7 @@
       "pool": "0x5E91619CF346BF692287AF1E18219CcfFb641c6B",
       "baseToken": {
         "symbol": "COOK",
-        "address": "0xEF991B15c54Ed3D4d84493F1B45a9F337c78322e"
+        "address": "0x9F0C013016E8656bC256f948CD4B79ab25c7b94D"
       },
       "quoteToken": {
         "symbol": "USDe",
