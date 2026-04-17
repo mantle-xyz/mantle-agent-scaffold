@@ -19,7 +19,7 @@
       "aliases": ["Wrapped MNT"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -33,7 +33,7 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -47,7 +47,7 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -61,7 +61,7 @@
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -75,7 +75,7 @@
       "aliases": ["mETH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -89,7 +89,7 @@
       "aliases": ["cmETH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -103,7 +103,7 @@
       "aliases": ["Agni Swap Router"],
       "source": {
         "url": "https://agni.finance",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -117,7 +117,7 @@
       "aliases": ["Merchant Moe Router", "MoeRouter"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -131,7 +131,7 @@
       "aliases": ["LB Router", "Liquidity Book Router"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -145,7 +145,7 @@
       "aliases": ["Aave Pool"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -159,7 +159,7 @@
       "aliases": ["Aave Data Provider"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -173,7 +173,7 @@
       "aliases": ["Aave Addresses Provider"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -187,7 +187,7 @@
       "aliases": ["Standard Bridge L2"],
       "source": {
         "url": "https://docs.mantle.xyz/network/system-information/off-chain-system/key-l2-contract-address",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     },
     {
@@ -201,7 +201,7 @@
       "aliases": ["Wrapped MNT Sepolia"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-02-28T00:00:00Z"
+        "retrieved_at": "2026-04-15T00:00:00Z"
       }
     }
   ]

@@ -25,6 +25,7 @@ import {
   DRY_RUN,
   approveIfNeeded,
   readBalance,
+  resetAllowance,
   trackTx,
   runScenario,
   wallet,
@@ -39,6 +40,21 @@ import {
 // --- Amounts ----------------------------------------------------------------
 const SWAP_WMNT_AMOUNT = "0.1";   // WMNT-in amount per provider
 const ENSURE_WMNT      = "0.5";   // wrap up to this much WMNT at start
+
+// ---------------------------------------------------------------------------
+// Setup: reset all relevant allowances to 0 before the scenario runs.
+// This ensures every `approve` step below executes (no "already sufficient"
+// skips), making each run produce a complete, deterministic trace.
+// ---------------------------------------------------------------------------
+
+test("Setup: reset WMNT/USDe allowances for Moe + Agni to 0", async () => {
+  const w = wallet();
+  await resetAllowance(w, WMNT, MOE_LB_ROUTER,     "Moe LB Router");
+  await resetAllowance(w, USDe, MOE_LB_ROUTER,     "Moe LB Router");
+  await resetAllowance(w, WMNT, AGNI_SWAP_ROUTER,  "Agni SwapRouter");
+  await resetAllowance(w, USDe, AGNI_SWAP_ROUTER,  "Agni SwapRouter");
+  setDetails({ allowances_reset: true });
+});
 
 // ---------------------------------------------------------------------------
 // A — Ensure WMNT balance
@@ -236,6 +252,20 @@ test("Agni: swap USDe → WMNT (roundtrip back)", async () => {
       roundtrip_spent: SWAP_WMNT_AMOUNT,
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Teardown: restore allowances to 0 so the wallet ends in the same state
+// it was in before the scenario started.
+// ---------------------------------------------------------------------------
+
+test("Teardown: reset WMNT/USDe allowances for Moe + Agni to 0", async () => {
+  const w = wallet();
+  await resetAllowance(w, WMNT, MOE_LB_ROUTER,     "Moe LB Router");
+  await resetAllowance(w, USDe, MOE_LB_ROUTER,     "Moe LB Router");
+  await resetAllowance(w, WMNT, AGNI_SWAP_ROUTER,  "Agni SwapRouter");
+  await resetAllowance(w, USDe, AGNI_SWAP_ROUTER,  "Agni SwapRouter");
+  setDetails({ allowances_reset: true });
 });
 
 // ---------------------------------------------------------------------------

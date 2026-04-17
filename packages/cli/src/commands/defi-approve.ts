@@ -15,7 +15,7 @@ export function registerApprove(parent: Command): void {
     .description("Build an unsigned ERC-20 approve for a whitelisted spender")
     .requiredOption("--token <token>", "token symbol or address")
     .requiredOption("--spender <address>", "whitelisted contract address to approve")
-    .requiredOption("--amount <amount>", "decimal amount to approve, or 'max' for unlimited")
+    .requiredOption("--amount <amount>", "decimal amount to approve, 'max' for unlimited, or 'revoke' to reset to 0")
     .option("--owner <address>", "wallet address (used to check existing allowance)")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();

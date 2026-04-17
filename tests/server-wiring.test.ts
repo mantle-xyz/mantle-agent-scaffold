@@ -16,6 +16,7 @@ describe("server wiring", () => {
       "mantle_buildCollectFees",
       "mantle_buildRawTx",
       "mantle_buildRemoveLiquidity",
+      "mantle_buildSetLBApprovalForAll",
       "mantle_buildSwap",
       "mantle_buildUnwrapMnt",
       "mantle_buildWrapMnt",

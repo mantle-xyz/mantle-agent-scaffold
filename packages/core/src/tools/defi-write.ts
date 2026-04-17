@@ -542,8 +542,13 @@ export async function buildApprove(
   const spender = requireAddress(args.spender, "spender");
   const tokenInput = requireString(args.token, "token");
   const resolved = await resolveToken(d, tokenInput, network);
+  // "revoke" (or "0") sets allowance to zero; bypasses the positive-amount guard
+  // and the "already sufficient" skip so approve(spender, 0) is always built.
+  const isRevoke = args.amount === "revoke" || args.amount === "0";
   const amountRaw = args.amount === "max" || args.amount === "unlimited"
     ? MAX_UINT256
+    : isRevoke
+    ? 0n
     : requirePositiveAmount(args.amount, "amount", resolved.decimals);
 
   // Whitelist enforcement
@@ -575,8 +580,9 @@ export async function buildApprove(
     }
   }
 
-  // If allowance is already sufficient, skip
-  if (existingAllowance !== null && existingAllowance >= amountRaw) {
+  // If allowance is already sufficient, skip.
+  // Never skip for revoke — approve(spender, 0) must always be built.
+  if (!isRevoke && existingAllowance !== null && existingAllowance >= amountRaw) {
     const existingDecimal = formatUnits(existingAllowance, resolved.decimals);
     return {
       intent: "approve_skip",
@@ -598,6 +604,8 @@ export async function buildApprove(
   const amountDecimal =
     amountRaw === MAX_UINT256
       ? "unlimited"
+      : isRevoke
+      ? "0 (revoke)"
       : formatUnits(amountRaw, resolved.decimals);
 
   const data = encodeFunctionData({
@@ -614,8 +622,10 @@ export async function buildApprove(
   }
 
   return {
-    intent: "approve",
-    human_summary: `Approve ${amountDecimal} ${resolved.symbol} for ${spenderLabel}`,
+    intent: isRevoke ? "approve_revoke" : "approve",
+    human_summary: isRevoke
+      ? `Revoke ${resolved.symbol} approval for ${spenderLabel} (set allowance to 0)`
+      : `Approve ${amountDecimal} ${resolved.symbol} for ${spenderLabel}`,
     unsigned_tx: {
       to: resolved.address,
       data,
@@ -4094,7 +4104,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69… for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69888b0d11cEC22caA5034e25FfFBDc88421 for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {

@@ -99,7 +99,7 @@ export function createServer(): Server {
         timestamp: new Date(startTime).toISOString(),
         duration_ms: Date.now() - startTime,
         success: false,
-        error_code: errorPayload.code ?? "INTERNAL_ERROR"
+        error_code: String(errorPayload.code ?? "INTERNAL_ERROR")
       });
       return {
         content: [{ type: "text", text: JSON.stringify(errorPayload) }],

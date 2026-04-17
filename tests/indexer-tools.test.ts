@@ -58,6 +58,7 @@ describe("indexer tools", () => {
         timeout_ms: 1000
       },
       {
+        dnsResolver: async () => {},
         fetchJson: async () => ({
           json: {
             data: {
@@ -92,6 +93,7 @@ describe("indexer tools", () => {
             query: "{ pairs { id } }"
           },
           {
+            dnsResolver: async () => {},
             fetchJson: async () => ({
               json: { data: { pairs: [{ id: "1" }] }, errors: null },
               elapsed_ms: 5,
@@ -117,6 +119,7 @@ describe("indexer tools", () => {
       },
       {
         maxRows: 1,
+        dnsResolver: async () => {},
         fetchJson: async () => ({
           json: {
             columns: ["block_number"],

@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { allTools } from "@mantleio/mantle-core/tools/index.js";
 import { formatKeyValue, formatTable, formatJson } from "../formatter.js";
 import { parseIntegerOption, parseNumberOption, parseJsonArray, parseBigIntArray } from "../utils.js";
+import { runWithDryRunGuard } from "./dry-run.js";
 
 /**
  * Liquidity provision operations:
@@ -84,6 +85,10 @@ export function registerLp(parent: Command): void {
     .option("--distribution-x <json>", "token X distribution per bin as JSON array. For merchant_moe")
     .option("--distribution-y <json>", "token Y distribution per bin as JSON array. For merchant_moe")
     .option("--owner <address>", "wallet address that will sign (enables blocking allowance check)")
+    // ── Two-step confirmation flags ──────────────────────────────────────
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const hasTokenAmounts = opts.amountA != null && opts.amountB != null;
@@ -93,7 +98,7 @@ export function registerLp(parent: Command): void {
           "Provide either (--amount-a + --amount-b) or --amount-usd."
         );
       }
-      const result = await allTools["mantle_buildAddLiquidity"].handler({
+      const toolArgs = {
         provider: opts.provider,
         token_a: opts.tokenA,
         token_b: opts.tokenB,
@@ -118,12 +123,34 @@ export function registerLp(parent: Command): void {
           ? parseJsonArray(opts.distributionY as string, "--distribution-y")
           : undefined,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "lp-add",
+          provider: opts.provider,
+          tokenA: opts.tokenA,
+          tokenB: opts.tokenB,
+          amountA: opts.amountA,
+          amountB: opts.amountB,
+          amountUsd: opts.amountUsd,
+          recipient: opts.recipient,
+          owner: opts.owner,
+          slippageBps: opts.slippageBps,
+          feeTier: opts.feeTier,
+          tickLower: opts.tickLower,
+          tickUpper: opts.tickUpper,
+          rangePreset: opts.rangePreset,
+          binStep: opts.binStep,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAddLiquidity"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── remove ──────────────────────────────────────────────────────────
@@ -153,6 +180,10 @@ export function registerLp(parent: Command): void {
     .option("--ids <json>", "bin IDs to remove from as JSON array. For merchant_moe. Optional with --percentage.")
     .option("--amounts <json>", "LP token balances (balance_raw) per bin as JSON array of strings. For merchant_moe. Use --percentage instead for automatic mode.")
     .option("--owner <address>", "wallet address that holds the LP tokens (the signer). For merchant_moe percentage mode when signer differs from recipient.")
+    // ── Two-step confirmation flags ──────────────────────────────────────
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const provider = String(opts.provider).toLowerCase();
@@ -202,7 +233,7 @@ export function registerLp(parent: Command): void {
         }
       }
 
-      const result = await allTools["mantle_buildRemoveLiquidity"].handler({
+      const toolArgs = {
         provider: opts.provider,
         recipient: opts.recipient,
         owner: opts.owner,
@@ -212,18 +243,31 @@ export function registerLp(parent: Command): void {
         token_a: opts.tokenA,
         token_b: opts.tokenB,
         bin_step: opts.binStep,
-        // Use BigInt-safe parsing so large LB-token amounts (commonly >2^53)
-        // don't lose precision through JSON.parse → Number rounding, which
-        // would cause on-chain burn() to revert with balance mismatch.
         ids: opts.ids ? parseBigIntArray(opts.ids as string, "--ids") : undefined,
         amounts: opts.amounts ? parseBigIntArray(opts.amounts as string, "--amounts") : undefined,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "lp-remove",
+          provider: opts.provider,
+          recipient: opts.recipient,
+          tokenId: opts.tokenId,
+          liquidity: opts.liquidity,
+          percentage: opts.percentage,
+          tokenA: opts.tokenA,
+          tokenB: opts.tokenB,
+          binStep: opts.binStep,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildRemoveLiquidity"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── approve-lb ──────────────────────────────────────────────────────
@@ -490,23 +534,40 @@ export function registerLp(parent: Command): void {
   // ── collect-fees ────────────────────────────────────────────────────
   group
     .command("collect-fees")
-    .description("Build unsigned V3 fee collection transaction")
+    .description(
+      "Build unsigned V3 fee collection transaction. " +
+      "Requires --dry-run first, then --confirm --token <token>."
+    )
     .requiredOption("--provider <provider>", "DEX provider: agni or fluxion")
     .requiredOption("--token-id <id>", "V3 NFT position token ID")
     .requiredOption("--recipient <address>", "address to receive collected fees")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildCollectFees"].handler({
+      const toolArgs = {
         provider: opts.provider,
         token_id: opts.tokenId,
         recipient: opts.recipient,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "lp-collect-fees",
+          provider: opts.provider,
+          tokenId: opts.tokenId,
+          recipient: opts.recipient,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildCollectFees"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── suggest-ticks ───────────────────────────────────────────────────

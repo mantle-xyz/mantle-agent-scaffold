@@ -36,6 +36,7 @@ import {
   DRY_RUN,
   approveIfNeeded,
   readBalance,
+  resetAllowance,
   trackTx,
   runScenario,
   wallet,
@@ -254,6 +255,20 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       `LP cleanup failed — ${moeRemaining.length} Moe + ${agniRemaining.length} Agni position(s) still non-empty`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Setup: zero out all relevant allowances so every approve step in this run
+// is exercised (no "already sufficient" skips from a previous run).
+// ---------------------------------------------------------------------------
+
+test("Setup: reset WMNT/USDT/USDe allowances for Moe + Agni to 0", async () => {
+  const w = wallet();
+  await resetAllowance(w, WMNT, MOE_LB_ROUTER,         "Moe LB Router");
+  await resetAllowance(w, USDT, MOE_LB_ROUTER,         "Moe LB Router");
+  await resetAllowance(w, WMNT, AGNI_POSITION_MANAGER, "Agni PositionManager");
+  await resetAllowance(w, USDe, AGNI_POSITION_MANAGER, "Agni PositionManager");
+  setDetails({ allowances_reset: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -597,6 +612,137 @@ test("Agni: remove liquidity (100%)", async () => {
       gas_used: result.receipt.gasUsed.toString(),
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Teardown: restore wallet to its pre-scenario state.
+//
+// The LP scenario acquires USDT and USDe by swapping WMNT (token prep), then
+// fully removes the LP positions — but the stables end up back in the wallet,
+// not re-converted to WMNT. We swap them all back here so the wallet exits with
+// roughly the same WMNT it had at the start (minus swap slippage and gas).
+// Then every allowance is zeroed out.
+// ---------------------------------------------------------------------------
+
+test("Teardown: swap all USDT back to WMNT on Moe", async () => {
+  const w = wallet();
+  if (DRY_RUN) {
+    setDetails({ skipped: true, reason: "dry_run" });
+    return;
+  }
+
+  const usdtBalance = await readBalance(w, USDT);
+  const MIN_SWAP = parseUnits("0.001", 6); // skip dust < 0.001 USDT
+  if (usdtBalance < MIN_SWAP) {
+    console.log(
+      `  (USDT balance ${formatUnits(usdtBalance, 6)} < 0.001, nothing to swap back)`,
+    );
+    setDetails({ skipped: true, usdt_balance: formatUnits(usdtBalance, 6) });
+    return;
+  }
+
+  const swapAmount = formatUnits(usdtBalance, 6);
+  console.log(`  Swapping ${swapAmount} USDT → WMNT on Moe...`);
+
+  const quote = await runCli([
+    "defi", "swap-quote",
+    "--in", "USDT", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--provider", "merchant_moe",
+  ]);
+  assertEqual(quote.exitCode, 0, "USDT→WMNT quote exit code");
+  const minOut = quote.json?.minimum_out_raw;
+  assertDefined(minOut, "minimum_out_raw for USDT→WMNT");
+
+  // USDT may still be approved from the Moe LP add; approveIfNeeded is a no-op
+  // if the allowance is still sufficient. The final teardown step resets it.
+  await approveIfNeeded(w, USDT, MOE_LB_ROUTER, "Moe LB Router");
+
+  const wmntBefore = await readBalance(w, WMNT);
+  const tx = await buildTx([
+    "swap", "build-swap",
+    "--provider", "merchant_moe",
+    "--in", "USDT", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--recipient", w.address,
+    "--amount-out-min", minOut,
+  ]);
+  const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
+  if (result) {
+    assertEqual(result.receipt.status, "success", "USDT→WMNT swap status");
+    trackTx(result.hash);
+    const wmntAfter = await readBalance(w, WMNT);
+    setDetails({
+      usdt_swapped: swapAmount,
+      wmnt_received: formatEther(wmntAfter - wmntBefore),
+    });
+  }
+});
+
+test("Teardown: swap all USDe back to WMNT on Moe", async () => {
+  const w = wallet();
+  if (DRY_RUN) {
+    setDetails({ skipped: true, reason: "dry_run" });
+    return;
+  }
+
+  const usdeBalance = await readBalance(w, USDe);
+  const MIN_SWAP = parseEther("0.001"); // skip dust < 0.001 USDe
+  if (usdeBalance < MIN_SWAP) {
+    console.log(
+      `  (USDe balance ${formatEther(usdeBalance)} < 0.001, nothing to swap back)`,
+    );
+    setDetails({ skipped: true, usde_balance: formatEther(usdeBalance) });
+    return;
+  }
+
+  const swapAmount = formatEther(usdeBalance);
+  console.log(`  Swapping ${swapAmount} USDe → WMNT on Moe...`);
+
+  const quote = await runCli([
+    "defi", "swap-quote",
+    "--in", "USDe", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--provider", "merchant_moe",
+  ]);
+  assertEqual(quote.exitCode, 0, "USDe→WMNT quote exit code");
+  const minOut = quote.json?.minimum_out_raw;
+  assertDefined(minOut, "minimum_out_raw for USDe→WMNT");
+
+  // USDe was not previously approved for Moe (only for Agni PositionManager).
+  // approveIfNeeded will set a fresh max allowance; the final step resets it.
+  await approveIfNeeded(w, USDe, MOE_LB_ROUTER, "Moe LB Router");
+
+  const wmntBefore = await readBalance(w, WMNT);
+  const tx = await buildTx([
+    "swap", "build-swap",
+    "--provider", "merchant_moe",
+    "--in", "USDe", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--recipient", w.address,
+    "--amount-out-min", minOut,
+  ]);
+  const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
+  if (result) {
+    assertEqual(result.receipt.status, "success", "USDe→WMNT swap status");
+    trackTx(result.hash);
+    const wmntAfter = await readBalance(w, WMNT);
+    setDetails({
+      usde_swapped: swapAmount,
+      wmnt_received: formatEther(wmntAfter - wmntBefore),
+    });
+  }
+});
+
+test("Teardown: reset all token allowances to 0", async () => {
+  const w = wallet();
+  // Reset every pair touched during setup, the scenario, and the teardown swaps.
+  await resetAllowance(w, WMNT, MOE_LB_ROUTER,         "Moe LB Router");
+  await resetAllowance(w, USDT, MOE_LB_ROUTER,         "Moe LB Router");
+  await resetAllowance(w, USDe, MOE_LB_ROUTER,         "Moe LB Router"); // set by teardown swap
+  await resetAllowance(w, WMNT, AGNI_POSITION_MANAGER, "Agni PositionManager");
+  await resetAllowance(w, USDe, AGNI_POSITION_MANAGER, "Agni PositionManager");
+  setDetails({ allowances_reset: true });
 });
 
 // ---------------------------------------------------------------------------

@@ -284,6 +284,26 @@ export async function getTokenPrices(
 
   const resolvedInputs = await Promise.all(
     tokens.map(async (input) => {
+      // Handle MNT (native gas token) before resolveTokenInput to bypass the
+      // WMNT ambiguity warning, which is only relevant for ERC-20 contexts.
+      if (input.toLowerCase() === "mnt") {
+        try {
+          const wrapped = await resolvedDeps.resolveTokenInput("WMNT", network);
+          return {
+            input,
+            resolved: { address: "native" as const, symbol: "MNT", decimals: 18, name: "Mantle" },
+            pricingAddress: wrapped.address.toLowerCase(),
+            parseError: null as string | null
+          };
+        } catch (error) {
+          return {
+            input,
+            resolved: null as ResolvedTokenInput | null,
+            pricingAddress: null as string | null,
+            parseError: error instanceof Error ? error.message : String(error)
+          };
+        }
+      }
       try {
         const token = await resolvedDeps.resolveTokenInput(input, network);
         if (token.address === "native") {

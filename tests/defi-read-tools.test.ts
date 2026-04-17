@@ -16,7 +16,7 @@ describe("defi read tools", () => {
     const result = await getSwapQuote(
       {
         token_in: "USDC",
-        token_out: "USDT",
+        token_out: "USDT0",
         amount_in: "100",
         provider: "agni",
         network: "mainnet"
@@ -45,7 +45,7 @@ describe("defi read tools", () => {
     const result = await getSwapQuote(
       {
         token_in: "USDC",
-        token_out: "USDT",
+        token_out: "USDT0",
         amount_in: "100",
         provider: "best",
         network: "mainnet"
@@ -83,7 +83,7 @@ describe("defi read tools", () => {
     const result = await getSwapQuote(
       {
         token_in: "USDC",
-        token_out: "USDT",
+        token_out: "USDT0",
         amount_in: "100",
         provider: "best",
         network: "mainnet"
@@ -295,7 +295,7 @@ describe("defi read tools", () => {
 
     const result = await getSwapQuote({
       token_in: "USDC",
-      token_out: "USDT",
+      token_out: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
       amount_in: "100",
       provider: "agni",
       network: "mainnet"
@@ -405,7 +405,7 @@ describe("defi read tools", () => {
     const result = await getSwapQuote(
       {
         token_in: "USDC",
-        token_out: "USDT",
+        token_out: "USDT0",
         amount_in: "100",
         provider: "best",
         network: "mainnet"
@@ -669,7 +669,7 @@ describe("defi read tools", () => {
 
     const result = await getPoolOpportunities({
       token_a: "WMNT",
-      token_b: "USDT",
+      token_b: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
       provider: "merchant_moe",
       network: "mainnet"
     });

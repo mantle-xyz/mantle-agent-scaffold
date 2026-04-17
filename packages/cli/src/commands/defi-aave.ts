@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { allTools } from "@mantleio/mantle-core/tools/index.js";
 import { formatKeyValue, formatTable, formatJson } from "../formatter.js";
+import { runWithDryRunGuard } from "./dry-run.js";
 
 const VALID_RATE_MODES = [1, 2] as const;
 
@@ -20,7 +21,13 @@ function parseRateMode(value: string): number {
  *   aave borrow   — Build unsigned borrow transaction
  *   aave repay    — Build unsigned repay transaction
  *   aave withdraw — Build unsigned withdraw transaction
+ *   aave set-collateral — Enable/disable collateral
  *   aave markets  — Show lending market metrics (alias for defi lending-markets)
+ *
+ * CONFIRMATION FLOW: supply, borrow, repay, withdraw, set-collateral require
+ * a two-step confirmation process:
+ *   Step 1: --dry-run   → preview + confirmation_token
+ *   Step 2: --confirm --token <tok>  → full unsigned_tx
  */
 export function registerAave(parent: Command): void {
   const group = parent
@@ -32,24 +39,39 @@ export function registerAave(parent: Command): void {
     .command("supply")
     .description(
       "Build unsigned Aave V3 supply (deposit) transaction. " +
-      "Approve the asset for the Pool contract first."
+      "Approve the asset for the Pool contract first. " +
+      "Requires --dry-run first, then --confirm --token <token>."
     )
     .requiredOption("--asset <token>", "token symbol or address to supply")
     .requiredOption("--amount <amount>", "decimal amount to supply")
     .requiredOption("--on-behalf-of <address>", "address that receives aTokens (typically sender)")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildAaveSupply"].handler({
+      const toolArgs = {
         asset: opts.asset,
         amount: String(opts.amount),
         on_behalf_of: opts.onBehalfOf,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "aave-supply",
+          asset: opts.asset,
+          amount: opts.amount,
+          onBehalfOf: opts.onBehalfOf,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAaveSupply"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatAaveResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatAaveResult(result as Record<string, unknown>);
-      }
     });
 
   // ── borrow ──────────────────────────────────────────────────────────
@@ -57,7 +79,8 @@ export function registerAave(parent: Command): void {
     .command("borrow")
     .description(
       "Build unsigned Aave V3 borrow transaction. " +
-      "Requires sufficient collateral deposited first."
+      "Requires sufficient collateral deposited first. " +
+      "Requires --dry-run first, then --confirm --token <token>."
     )
     .requiredOption("--asset <token>", "token symbol or address to borrow")
     .requiredOption("--amount <amount>", "decimal amount to borrow")
@@ -68,20 +91,35 @@ export function registerAave(parent: Command): void {
       (v: string) => parseRateMode(v),
       2
     )
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildAaveBorrow"].handler({
+      const toolArgs = {
         asset: opts.asset,
         amount: String(opts.amount),
         on_behalf_of: opts.onBehalfOf,
         interest_rate_mode: opts.interestRateMode,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "aave-borrow",
+          asset: opts.asset,
+          amount: opts.amount,
+          onBehalfOf: opts.onBehalfOf,
+          interestRateMode: opts.interestRateMode,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAaveBorrow"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatAaveResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatAaveResult(result as Record<string, unknown>);
-      }
     });
 
   // ── repay ───────────────────────────────────────────────────────────
@@ -89,7 +127,8 @@ export function registerAave(parent: Command): void {
     .command("repay")
     .description(
       "Build unsigned Aave V3 repay transaction. " +
-      "Use --amount max to repay full debt. Approve the asset for Pool first."
+      "Use --amount max to repay full debt. Approve the asset for Pool first. " +
+      "Requires --dry-run first, then --confirm --token <token>."
     )
     .requiredOption("--asset <token>", "token symbol or address to repay")
     .requiredOption("--amount <amount>", "decimal amount to repay, or 'max' for full debt")
@@ -100,20 +139,35 @@ export function registerAave(parent: Command): void {
       (v: string) => parseRateMode(v),
       2
     )
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildAaveRepay"].handler({
+      const toolArgs = {
         asset: opts.asset,
         amount: String(opts.amount),
         on_behalf_of: opts.onBehalfOf,
         interest_rate_mode: opts.interestRateMode,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "aave-repay",
+          asset: opts.asset,
+          amount: opts.amount,
+          onBehalfOf: opts.onBehalfOf,
+          interestRateMode: opts.interestRateMode,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAaveRepay"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatAaveResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatAaveResult(result as Record<string, unknown>);
-      }
     });
 
   // ── withdraw ────────────────────────────────────────────────────────
@@ -121,24 +175,39 @@ export function registerAave(parent: Command): void {
     .command("withdraw")
     .description(
       "Build unsigned Aave V3 withdraw transaction. " +
-      "Use --amount max to withdraw entire balance. May lower health factor."
+      "Use --amount max to withdraw entire balance. May lower health factor. " +
+      "Requires --dry-run first, then --confirm --token <token>."
     )
     .requiredOption("--asset <token>", "token symbol or address to withdraw")
     .requiredOption("--amount <amount>", "decimal amount to withdraw, or 'max' for full balance")
     .requiredOption("--to <address>", "address to receive the withdrawn tokens")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildAaveWithdraw"].handler({
+      const toolArgs = {
         asset: opts.asset,
         amount: String(opts.amount),
         to: opts.to,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "aave-withdraw",
+          asset: opts.asset,
+          amount: opts.amount,
+          to: opts.to,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAaveWithdraw"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatAaveResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatAaveResult(result as Record<string, unknown>);
-      }
     });
 
   // ── set-collateral ──────────────────────────────────────────────────
@@ -147,24 +216,39 @@ export function registerAave(parent: Command): void {
     .description(
       "Build unsigned Aave V3 transaction to enable/disable a supplied asset as collateral. " +
       "The tx operates on msg.sender (the signing wallet). " +
-      "Use --user for preflight diagnostics (checks aToken balance, LTV, collateral status)."
+      "Use --user for preflight diagnostics (checks aToken balance, LTV, collateral status). " +
+      "Requires --dry-run first, then --confirm --token <token>."
     )
     .requiredOption("--asset <token>", "token symbol or address")
     .option("--user <address>", "wallet address for preflight diagnostics (not encoded in tx)")
     .option("--disable", "disable as collateral (default: enable)")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildAaveSetCollateral"].handler({
+      const toolArgs = {
         asset: opts.asset,
         user: opts.user,
         use_as_collateral: !opts.disable,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "aave-set-collateral",
+          asset: opts.asset,
+          useAsCollateral: String(!opts.disable),
+          user: opts.user,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildAaveSetCollateral"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatAaveResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatAaveResult(result as Record<string, unknown>);
-      }
     });
 
   // ── positions ───────────────────────────────────────────────────────

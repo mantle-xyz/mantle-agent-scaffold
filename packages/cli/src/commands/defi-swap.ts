@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { allTools } from "@mantleio/mantle-core/tools/index.js";
 import { formatKeyValue, formatTable, formatJson } from "../formatter.js";
 import { parseNumberOption, parseIntegerOption } from "../utils.js";
+import { runWithDryRunGuard } from "./dry-run.js";
 
 /**
  * DEX swap & token operations:
@@ -12,6 +13,11 @@ import { parseNumberOption, parseIntegerOption } from "../utils.js";
  *
  * Note: `approve` has been hoisted to the top level (`mantle-cli approve`)
  * since approvals are required across DeFi (swap, LP, Aave), not just swaps.
+ *
+ * CONFIRMATION FLOW: build-swap, wrap-mnt, unwrap-mnt require a two-step
+ * confirmation process:
+ *   Step 1: --dry-run   → preview + confirmation_token (no calldata generated)
+ *   Step 2: --confirm --token <tok>  → full unsigned_tx
  */
 export function registerSwap(parent: Command): void {
   const group = parent
@@ -21,7 +27,11 @@ export function registerSwap(parent: Command): void {
   // ── build-swap ──────────────────────────────────────────────────────
   group
     .command("build-swap")
-    .description("Build an unsigned swap transaction for Agni, Fluxion, or Merchant Moe")
+    .description(
+      "Build an unsigned swap transaction for Agni, Fluxion, or Merchant Moe. " +
+      "Requires a two-step confirmation: run with --dry-run first to preview and get a " +
+      "confirmation token, then re-run with --confirm --token <token>."
+    )
     .requiredOption("--provider <provider>", "DEX provider: agni, fluxion, or merchant_moe")
     .requiredOption("--in <token>", "input token symbol or address")
     .requiredOption("--out <token>", "output token symbol or address")
@@ -58,9 +68,13 @@ export function registerSwap(parent: Command): void {
       "--owner <address>",
       "wallet address that owns token_in — enables blocking INSUFFICIENT_ALLOWANCE check (prevents STF reverts)"
     )
+    // ── Two-step confirmation flags ──────────────────────────────────────
+    .option("--dry-run", "Preview the swap without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildSwap"].handler({
+      const toolArgs = {
         provider: opts.provider,
         token_in: opts.in,
         token_out: opts.out,
@@ -75,48 +89,88 @@ export function registerSwap(parent: Command): void {
         quote_bin_step: opts.quoteBinStep,
         owner: opts.owner,
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: {
+          command: "build-swap",
+          provider: opts.provider,
+          in: opts.in,
+          out: opts.out,
+          amount: opts.amount,
+          recipient: opts.recipient,
+          amountOutMin: opts.amountOutMin,
+          slippageBps: opts.slippageBps,
+          feeTier: opts.feeTier,
+          binStep: opts.binStep,
+          owner: opts.owner,
+          network: globals.network
+        },
+        handler: () => allTools["mantle_buildSwap"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── wrap-mnt ────────────────────────────────────────────────────────
   group
     .command("wrap-mnt")
-    .description("Build an unsigned wrap MNT → WMNT transaction")
+    .description(
+      "Build an unsigned wrap MNT → WMNT transaction. " +
+      "Requires --dry-run first, then --confirm --token <token>."
+    )
     .requiredOption("--amount <amount>", "decimal amount of MNT to wrap")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildWrapMnt"].handler({
+      const toolArgs = {
         amount: String(opts.amount),
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: { command: "wrap-mnt", amount: opts.amount, network: globals.network },
+        handler: () => allTools["mantle_buildWrapMnt"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── unwrap-mnt ──────────────────────────────────────────────────────
   group
     .command("unwrap-mnt")
-    .description("Build an unsigned unwrap WMNT → MNT transaction")
+    .description(
+      "Build an unsigned unwrap WMNT → MNT transaction. " +
+      "Requires --dry-run first, then --confirm --token <token>."
+    )
     .requiredOption("--amount <amount>", "decimal amount of WMNT to unwrap")
+    .option("--dry-run", "Preview without generating calldata. Returns a confirmation token.")
+    .option("--confirm", "Execute after a dry-run. Must be combined with --token <token>.")
+    .option("--token <token>", "Confirmation token returned by a prior --dry-run invocation.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_buildUnwrapMnt"].handler({
+      const toolArgs = {
         amount: String(opts.amount),
         network: globals.network
+      };
+
+      await runWithDryRunGuard({
+        dryRun: Boolean(opts.dryRun),
+        confirm: Boolean(opts.confirm),
+        token: opts.token as string | undefined,
+        hashParams: { command: "unwrap-mnt", amount: opts.amount, network: globals.network },
+        handler: () => allTools["mantle_buildUnwrapMnt"].handler(toolArgs) as Promise<Record<string, unknown>>,
+        isJson: Boolean(globals.json),
+        formatHuman: (result) => formatUnsignedTxResult(result)
       });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        formatUnsignedTxResult(result as Record<string, unknown>);
-      }
     });
 
   // ── pairs ───────────────────────────────────────────────────────────

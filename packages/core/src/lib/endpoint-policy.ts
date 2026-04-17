@@ -159,10 +159,20 @@ async function rejectPrivateResolution(hostname: string): Promise<void> {
 /**
  * Full endpoint validation: URL check + DNS resolution check.
  * Use this for user-supplied endpoints (indexer, diagnostics probe).
+ *
+ * @param dnsResolver - Optional override for DNS resolution. Pass a no-op
+ *   `async () => {}` in tests to bypass real DNS lookups for fake hostnames.
  */
-export async function ensureEndpointSafe(endpoint: string): Promise<URL> {
+export async function ensureEndpointSafe(
+  endpoint: string,
+  dnsResolver?: (hostname: string) => Promise<void>
+): Promise<URL> {
   const url = ensureEndpointAllowed(endpoint);
-  await rejectPrivateResolution(url.hostname);
+  if (dnsResolver) {
+    await dnsResolver(url.hostname);
+  } else {
+    await rejectPrivateResolution(url.hostname);
+  }
   return url;
 }
 

@@ -13,6 +13,8 @@ interface IndexerDeps {
   now: () => string;
   maxRows: number;
   maxSubgraphResponseBytes: number;
+  /** Optional override for DNS resolution. Pass `async () => {}` in tests to skip real DNS. */
+  dnsResolver?: (hostname: string) => Promise<void>;
 }
 
 function containsHasNextPageTrue(value: unknown): boolean {
@@ -103,7 +105,7 @@ export async function querySubgraph(
     );
   }
 
-  const endpoint = (await ensureEndpointSafe(endpointInput)).toString();
+  const endpoint = (await ensureEndpointSafe(endpointInput, resolvedDeps.dnsResolver)).toString();
 
   try {
     const { json, elapsed_ms, response_bytes } = await resolvedDeps.fetchJson(
@@ -177,7 +179,7 @@ export async function queryIndexerSql(
   }
 
   ensureReadOnlySql(query);
-  const endpoint = (await ensureEndpointSafe(endpointInput)).toString();
+  const endpoint = (await ensureEndpointSafe(endpointInput, resolvedDeps.dnsResolver)).toString();
 
   try {
     const { json, elapsed_ms } = await resolvedDeps.fetchJson(
