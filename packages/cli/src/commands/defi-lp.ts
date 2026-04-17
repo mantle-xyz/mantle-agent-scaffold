@@ -772,6 +772,8 @@ function formatUnsignedTxResult(data: Record<string, unknown>): void {
       tx_chainId: tx?.chainId,
       tx_data: truncateHex(tx?.data as string | undefined),
       tx_gas: tx?.gas ?? "auto",
+      tx_maxFeePerGas: tx?.maxFeePerGas ?? "—",
+      tx_maxPriorityFeePerGas: tx?.maxPriorityFeePerGas ?? "—",
       built_at: data.built_at_utc
     },
     {
@@ -783,6 +785,8 @@ function formatUnsignedTxResult(data: Record<string, unknown>): void {
         tx_chainId: "Chain ID",
         tx_data: "Calldata",
         tx_gas: "Gas Limit",
+        tx_maxFeePerGas: "Max Fee/Gas",
+        tx_maxPriorityFeePerGas: "Priority Fee",
         built_at: "Built At"
       }
     }
