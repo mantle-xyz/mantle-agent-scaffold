@@ -1031,23 +1031,27 @@ export async function suggestTickRange(
 const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
 
 async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: controller.signal
+      });
+      if (response.ok) return await response.json();
+      // Client errors (4xx) won't be fixed by retrying
+      if (response.status >= 400 && response.status < 500) return null;
+      // Server errors (5xx) fall through to retry
+    } catch {
+      // Network error or timeout — fall through to retry
+    } finally {
+      clearTimeout(timer);
     }
-    return await response.json();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
   }
+  return null;
 }
 
 function resolveDexScreenerChain(network: Network): string | null {

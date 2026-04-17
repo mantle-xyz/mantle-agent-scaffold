@@ -459,23 +459,27 @@ function normalizeProtocolInput(input: string): "all" | ProtocolTvlKey {
 }
 
 async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: controller.signal
+      });
+      if (response.ok) return await response.json();
+      // Client errors (4xx) won't be fixed by retrying
+      if (response.status >= 400 && response.status < 500) return null;
+      // Server errors (5xx) fall through to retry
+    } catch {
+      // Network error or timeout — fall through to retry
+    } finally {
+      clearTimeout(timer);
     }
-    return await response.json();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
   }
+  return null;
 }
 
 function parseDecimalToRaw(value: number | string | null | undefined, decimals: number | null): string {
@@ -700,10 +704,23 @@ async function fetchDexScreenerTokenPriceUsd(
   }
 
   const pairs = payload as DexScreenerPair[];
-  const best =
-    pairs.find((pair) => addressesEqual(pair.baseToken?.address, tokenAddress)) ??
-    pairs[0];
-  return asFiniteNumber(best?.priceUsd);
+  // Prefer pairs where the queried token is the baseToken (price expressed as USD per token).
+  // Sort by liquidity.usd descending to use the deepest, most reliable market price.
+  const addrLower = tokenAddress.toLowerCase();
+  const baseMatches = pairs.filter((p) => p.baseToken?.address?.toLowerCase() === addrLower);
+  const candidates = baseMatches.length > 0 ? baseMatches : pairs;
+
+  const sorted = [...candidates].sort((a, b) => {
+    const liqA = asFiniteNumber(a.liquidity?.usd) ?? 0;
+    const liqB = asFiniteNumber(b.liquidity?.usd) ?? 0;
+    return liqB - liqA;
+  });
+
+  for (const pair of sorted) {
+    const price = asFiniteNumber(pair.priceUsd);
+    if (price !== null && price > 0) return price;
+  }
+  return null;
 }
 
 async function fetchDefiLlamaTokenPrices(
