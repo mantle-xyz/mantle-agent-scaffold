@@ -29,7 +29,7 @@
 import { parseEther, parseUnits, formatEther, formatUnits } from "viem";
 
 import { signAndSend } from "./wallet.js";
-import { dryRunBuild, confirmBuild, runCli } from "./cli.js";
+import { buildTx, runCli } from "./cli.js";
 import { test, setDetails } from "./runner.js";
 import { assertEqual, assertDefined } from "./assert.js";
 import {
@@ -179,7 +179,7 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       `  Removing Moe ${symX}/${symY} (binStep ${pos.bin_step}, 100%)...`,
     );
 
-    const removeArgs = [
+    const tx = await buildTx([
       "lp", "remove",
       "--provider", "merchant_moe",
       "--recipient", w.address,
@@ -187,14 +187,7 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       "--token-b", symY,
       "--bin-step", String(pos.bin_step),
       "--percentage", "100",
-    ];
-
-    // Step 1: dry-run → preview + confirmation_token
-    const preview = await dryRunBuild(removeArgs);
-    assertDefined(preview.confirmation_token, "moe remove dry-run confirmation_token");
-
-    // Step 2: confirm → full unsigned_tx
-    const tx = await confirmBuild(removeArgs, preview.confirmation_token!);
+    ]);
     assertEqual(tx.intent, "remove_liquidity", "intent");
 
     const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
@@ -216,20 +209,13 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       `  Removing Agni ${sym0}/${sym1} (token_id=${pos.token_id}, fee ${pos.fee})...`,
     );
 
-    const removeArgs = [
+    const tx = await buildTx([
       "lp", "remove",
       "--provider", "agni",
       "--recipient", w.address,
       "--token-id", pos.token_id,
       "--percentage", "100",
-    ];
-
-    // Step 1: dry-run → preview + confirmation_token
-    const preview = await dryRunBuild(removeArgs);
-    assertDefined(preview.confirmation_token, "agni remove dry-run confirmation_token");
-
-    // Step 2: confirm → full unsigned_tx
-    const tx = await confirmBuild(removeArgs, preview.confirmation_token!);
+    ]);
     assertEqual(tx.intent, "remove_liquidity", "intent");
 
     const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
@@ -289,14 +275,7 @@ test("Ensure WMNT balance for LP + stable swaps (wrap MNT if needed)", async () 
 
   const needed = target - wmntBalance;
   const wrapAmount = formatEther(needed);
-  const wrapArgs = ["swap", "wrap-mnt", "--amount", wrapAmount];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(wrapArgs);
-  assertDefined(preview.confirmation_token, "wrap dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(wrapArgs, preview.confirmation_token!);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "wrap tx status");
@@ -335,21 +314,14 @@ test(`Acquire USDT: swap ${SWAP_WMNT_FOR_USDT} WMNT → USDT on Moe (skip if bal
   assertDefined(minOut, "minimum_out_raw");
 
   const before = DRY_RUN ? 0n : await readBalance(w, USDT);
-  const swapArgs = [
+  const tx = await buildTx([
     "swap", "build-swap",
     "--provider", "merchant_moe",
     "--in", "WMNT", "--out", "USDT",
     "--amount", SWAP_WMNT_FOR_USDT,
     "--recipient", w.address,
     "--amount-out-min", minOut,
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(swapArgs);
-  assertDefined(preview.confirmation_token, "swap dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(swapArgs, preview.confirmation_token!);
+  ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "tx status");
@@ -396,21 +368,14 @@ test(`Acquire USDe: swap ${SWAP_WMNT_FOR_USDe} WMNT → USDe on Moe (skip if bal
   assertDefined(minOut, "minimum_out_raw");
 
   const before = DRY_RUN ? 0n : await readBalance(w, USDe);
-  const swapArgs = [
+  const tx = await buildTx([
     "swap", "build-swap",
     "--provider", "merchant_moe",
     "--in", "WMNT", "--out", "USDe",
     "--amount", SWAP_WMNT_FOR_USDe,
     "--recipient", w.address,
     "--amount-out-min", minOut,
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(swapArgs);
-  assertDefined(preview.confirmation_token, "swap dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(swapArgs, preview.confirmation_token!);
+  ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "tx status");
@@ -447,7 +412,7 @@ test("Moe: add liquidity WMNT/USDT (active bin)", async () => {
 
   // Minimal business params only — CLI should resolve active_id, delta_ids,
   // and distribution internally (default behaviour = single bin at active id).
-  const addArgs = [
+  const tx = await buildTx([
     "lp", "add",
     "--provider", "merchant_moe",
     "--token-a", "WMNT",
@@ -456,14 +421,7 @@ test("Moe: add liquidity WMNT/USDT (active bin)", async () => {
     "--amount-b", MOE_LP_USDT,
     "--recipient", w.address,
     "--bin-step", String(pool.binStep),
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(addArgs);
-  assertDefined(preview.confirmation_token, "moe lp add dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(addArgs, preview.confirmation_token!);
+  ]);
 
   assertEqual(tx.intent, "add_liquidity", "intent");
   assertEqual(tx.unsigned_tx.chainId, CHAIN_ID, "chainId");
@@ -511,7 +469,7 @@ test("Moe: remove liquidity WMNT/USDT", async () => {
     }
   }
 
-  const removeArgs = [
+  const tx = await buildTx([
     "lp", "remove",
     "--provider", "merchant_moe",
     "--recipient", w.address,
@@ -519,14 +477,7 @@ test("Moe: remove liquidity WMNT/USDT", async () => {
     "--token-b", "USDT",
     "--bin-step", String(pool.binStep),
     "--percentage", "100",
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(removeArgs);
-  assertDefined(preview.confirmation_token, "moe lp remove dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(removeArgs, preview.confirmation_token!);
+  ]);
   assertEqual(tx.intent, "remove_liquidity", "intent");
 
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
@@ -557,7 +508,7 @@ test("Agni: add liquidity WMNT/USDe (full range)", async () => {
   // Business-level params: tokens, amounts, fee tier, and an explicit tick
   // range. Tick bounds are pool-specific (tickSpacing-aligned), so an agent
   // would compute full-range from the pool's tickSpacing.
-  const addArgs = [
+  const tx = await buildTx([
     "lp", "add",
     "--provider", "agni",
     "--token-a", "WMNT",
@@ -568,14 +519,7 @@ test("Agni: add liquidity WMNT/USDe (full range)", async () => {
     "--fee-tier",   String(pool.feeTier),
     "--tick-lower", String(-pool.fullRangeTick),
     "--tick-upper", String(pool.fullRangeTick),
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(addArgs);
-  assertDefined(preview.confirmation_token, "agni lp add dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(addArgs, preview.confirmation_token!);
+  ]);
 
   assertEqual(tx.intent, "add_liquidity", "intent");
   assertEqual(
@@ -629,20 +573,13 @@ test("Agni: remove liquidity (100%)", async () => {
     assertDefined(agniPos, "agni WMNT/USDe position");
   }
 
-  const removeArgs = [
+  const tx = await buildTx([
     "lp", "remove",
     "--provider", "agni",
     "--recipient", w.address,
     "--token-id", agniPos!.token_id,
     "--percentage", "100",
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(removeArgs);
-  assertDefined(preview.confirmation_token, "agni lp remove dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(removeArgs, preview.confirmation_token!);
+  ]);
 
   // V3 remove uses multicall on PositionManager.
   assertEqual(

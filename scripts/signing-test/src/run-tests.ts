@@ -19,7 +19,7 @@ import {
   formatMNT,
   type TestWallet,
 } from "./wallet.js";
-import { runCli, dryRunBuild, confirmBuild } from "./cli.js";
+import { runCli, buildTx } from "./cli.js";
 import { test, setTxHash, setDetails, runAllTests } from "./runner.js";
 import {
   assert,
@@ -86,30 +86,18 @@ async function approveIfNeeded(
   spender: string,
   spenderName: string,
 ): Promise<void> {
-  const approveArgs = [
+  const tx = await buildTx([
     "swap", "approve",
     "--token", token,
     "--spender", spender,
     "--amount", "max",
     "--owner", wallet.address,
-  ];
+  ]);
 
-  // Step 1: dry-run → get confirmation token (or approve_skip)
-  const preview = await dryRunBuild(approveArgs);
-
-  if (preview.intent === "approve_skip") {
+  if (tx.intent === "approve_skip") {
     console.log(`  (${tokenSymbol} → ${spenderName}: allowance already sufficient)`);
     return;
   }
-
-  if (!preview.confirmation_token) {
-    throw new Error(
-      `approve dry-run for ${tokenSymbol} did not return confirmation_token`
-    );
-  }
-
-  // Step 2: confirm → get the full unsigned_tx
-  const tx = await confirmBuild(approveArgs, preview.confirmation_token);
 
   const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
@@ -124,14 +112,7 @@ async function approveIfNeeded(
 
 test("Wrap MNT → WMNT", async () => {
   const before = await readBalance(WMNT as `0x${string}`);
-  const wrapArgs = ["swap", "wrap-mnt", "--amount", WRAP_AMOUNT];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(wrapArgs);
-  assertDefined(preview.confirmation_token, "wrap dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(wrapArgs, preview.confirmation_token!);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", WRAP_AMOUNT]);
   const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "tx status");
@@ -158,21 +139,14 @@ test("Swap WMNT → USDC (prepare LP pair)", async () => {
 
   // Swap
   const usdcBefore = await readBalance(USDC as `0x${string}`);
-  const swapArgs = [
+  const tx = await buildTx([
     "swap", "build-swap",
     "--provider", "agni",
     "--in", "WMNT", "--out", "USDC",
     "--amount", SWAP_FOR_USDC,
     "--recipient", wallet.address,
     "--amount-out-min", minOut,
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(swapArgs);
-  assertDefined(preview.confirmation_token, "swap dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(swapArgs, preview.confirmation_token!);
+  ]);
   const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "swap tx status");
@@ -194,7 +168,7 @@ test("Agni: approve WMNT + USDC for PositionManager", async () => {
 });
 
 test("Agni: add liquidity WMNT/USDC (full range)", async () => {
-  const addArgs = [
+  const tx = await buildTx([
     "lp", "add",
     "--provider", "agni",
     "--token-a", "WMNT",
@@ -203,14 +177,7 @@ test("Agni: add liquidity WMNT/USDC (full range)", async () => {
     "--amount-b", AGNI_LP_USDC,
     "--recipient", wallet.address,
     "--fee-tier", "10000",
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(addArgs);
-  assertDefined(preview.confirmation_token, "agni lp add dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(addArgs, preview.confirmation_token!);
+  ]);
 
   assertEqual(tx.intent, "add_liquidity", "intent");
   assertEqual(tx.unsigned_tx.chainId, CHAIN_ID, "chainId");
@@ -242,7 +209,7 @@ test("Moe: approve WMNT + USDC for LB Router", async () => {
 });
 
 test("Moe: add liquidity WMNT/USDC", async () => {
-  const addArgs = [
+  const tx = await buildTx([
     "lp", "add",
     "--provider", "merchant_moe",
     "--token-a", "WMNT",
@@ -251,14 +218,7 @@ test("Moe: add liquidity WMNT/USDC", async () => {
     "--amount-b", MOE_LP_USDC,
     "--recipient", wallet.address,
     "--bin-step", "25",
-  ];
-
-  // Step 1: dry-run → preview + confirmation_token
-  const preview = await dryRunBuild(addArgs);
-  assertDefined(preview.confirmation_token, "moe lp add dry-run confirmation_token");
-
-  // Step 2: confirm → full unsigned_tx
-  const tx = await confirmBuild(addArgs, preview.confirmation_token!);
+  ]);
 
   assertEqual(tx.intent, "add_liquidity", "intent");
   assertEqual(tx.unsigned_tx.chainId, CHAIN_ID, "chainId");
