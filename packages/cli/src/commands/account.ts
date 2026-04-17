@@ -73,7 +73,10 @@ export function registerAccount(parent: Command): void {
     .command("allowances")
     .description("Batch read ERC-20 allowances for token/spender pairs")
     .argument("<owner>", "owner address")
-    .requiredOption("--pairs <pairs>", "comma-separated token:spender pairs")
+    .requiredOption(
+      "--pairs <pairs>",
+      "comma-separated token:spender pairs; token can be a symbol (e.g. WMNT) or address, spender must be a hex address (e.g. WMNT:0xAbc...)"
+    )
     .action(async (owner: string, opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const pairsRaw = parseCommaList(opts.pairs as string);
