@@ -460,7 +460,7 @@ function wrapBuildHandler(
       // estimate independently.
       // ------------------------------------------------------------------
       const txData = result.unsigned_tx.data;
-      const isRealCall = txData && txData !== "0x" && txData.length > 2;
+      const isRealCall = txData && txData !== "0x" && txData.length >= 10;
       if (isRealCall) {
         // Resolve network BEFORE the try/catch so a bad network arg surfaces
         // as INVALID_NETWORK, not as a misleading GAS_ESTIMATION_FAILED.
@@ -585,8 +585,10 @@ interface UnsignedTxResult {
    * if two build-tool calls from the SAME sender return the same
    * idempotency_key, the second transaction MUST NOT be signed or broadcast.
    *
-   * Sender is extracted from args in priority order:
+   * Sender for idempotency scoping is extracted in priority order:
    *   sender > owner > on_behalf_of > recipient
+   * (Note: gas estimation uses a narrower chain — sender > owner > on_behalf_of —
+   *  because `recipient` is the output destination, not the signer.)
    * This covers all builder call patterns (swaps, Aave, LP, etc.).
    *
    * When `idempotency_scope.sender` is `"unscoped"`, the executor MUST
