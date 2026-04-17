@@ -43,7 +43,13 @@ export function capabilityCatalog(): {
       "Structured capability catalog for Mantle CLI tools. " +
       "Use category='query' for read-only lookups, 'analyze' for computed insights, " +
       "'execute' for transaction building. Check 'auth' to know if a wallet address is needed. " +
-      "Always append --json for machine-readable output.",
+      "Always append --json for machine-readable output. " +
+      "IMPORTANT — complete portfolio / balance view: wallet token balances (mantle_getTokenBalances) only show " +
+      "tokens held directly in the wallet. Assets locked in DeFi protocols are NOT included and must be " +
+      "fetched separately: (1) Agni/Fluxion V3 LP positions → mantle_getV3Positions; " +
+      "(2) Merchant Moe LB LP positions → mantle_getLBPositions; " +
+      "(3) Aave V3 supplied collateral and borrowed debt → mantle_getAavePositions. " +
+      "Always call all four tools when the user asks for their total balance, portfolio, net worth, or 'all assets'.",
     capabilities: CAPABILITIES
   };
 }
@@ -106,10 +112,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "Read native MNT balance for a wallet address.",
+    summary: "Read native MNT balance for a wallet address. NOTE: this only covers the native coin. For a complete portfolio view also call mantle_getTokenBalances, mantle_getV3Positions, mantle_getLBPositions, and mantle_getAavePositions.",
     cli_command: "mantle-cli account balance <address> --json",
     example: "{ \"address\": \"0x1234...\" }",
-    tags: ["account", "balance", "MNT", "wallet"]
+    tags: ["account", "balance", "MNT", "wallet", "portfolio"]
   },
   {
     id: "mantle_getTokenBalances",
@@ -117,10 +123,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "Batch read ERC-20 token balances for a wallet across specified tokens.",
+    summary: "Batch read ERC-20 token balances for a wallet across specified tokens. NOTE: only shows tokens sitting directly in the wallet. Assets deployed into DeFi are NOT reflected here — call mantle_getV3Positions (Agni/Fluxion LP), mantle_getLBPositions (Merchant Moe LP), and mantle_getAavePositions (Aave collateral/debt) to get the full picture.",
     cli_command: "mantle-cli account token-balances <address> --tokens USDC,WMNT --json",
     example: "{ \"address\": \"0x1234...\", \"tokens\": [\"USDC\", \"WMNT\"] }",
-    tags: ["account", "balance", "token", "ERC-20", "wallet"]
+    tags: ["account", "balance", "token", "ERC-20", "wallet", "portfolio"]
   },
   {
     id: "mantle_getAllowances",
@@ -256,11 +262,11 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "Read a wallet's Aave V3 positions: supplied collateral (aTokens), borrowed debt (debtTokens), health factor, liquidation threshold, and per-reserve breakdowns.",
+    summary: "Read a wallet's Aave V3 positions: supplied collateral (aTokens), borrowed debt (debtTokens), health factor, liquidation threshold, and per-reserve breakdowns. IMPORTANT: tokens supplied to Aave do NOT appear in mantle_getTokenBalances (they are held as aTokens inside the Aave pool) — always call this when checking a wallet's full balance or portfolio.",
     cli_command: "mantle-cli aave positions --user <address> --json",
     example: "{ \"user\": \"0x1234...\" }",
     workflow_before: ["mantle_buildAaveSupply", "mantle_buildAaveBorrow"],
-    tags: ["lending", "Aave", "position", "health", "collateral", "debt", "wallet", "portfolio"]
+    tags: ["lending", "Aave", "position", "health", "collateral", "debt", "wallet", "portfolio", "balance", "hidden assets"]
   },
   {
     id: "mantle_getLBPairState",
@@ -292,10 +298,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "List a wallet's Agni / Fluxion V3 LP positions: token_id, both tokens, fee tier, tick bounds, liquidity, uncollected fees, in-range flag. Falls back to Transfer event log scanning when the position manager lacks ERC721Enumerable (Agni). Partial scan failures surface in result.warnings.",
+    summary: "List a wallet's Agni / Fluxion V3 LP positions: token_id, both tokens, fee tier, tick bounds, liquidity, uncollected fees, in-range flag. Falls back to Transfer event log scanning when the position manager lacks ERC721Enumerable (Agni). Partial scan failures surface in result.warnings. IMPORTANT: tokens locked in LP positions do NOT appear in mantle_getTokenBalances — always call this when checking a wallet's full balance or portfolio.",
     cli_command: "mantle-cli lp positions --owner <address> --json",
     example: "{ \"owner\": \"0x1234...\" }",
-    tags: ["LP", "position", "V3", "NFT", "wallet"]
+    tags: ["LP", "position", "V3", "NFT", "wallet", "balance", "portfolio", "hidden assets"]
   },
   {
     id: "mantle_getLBPositions",
@@ -303,10 +309,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "Scan a wallet's Merchant Moe Liquidity Book LP positions (+-25 bins around active price, known pairs only): bin IDs, share percentage, estimated token amounts per bin.",
+    summary: "Scan a wallet's Merchant Moe Liquidity Book LP positions (+-25 bins around active price, known pairs only): bin IDs, share percentage, estimated token amounts per bin. IMPORTANT: tokens locked in LB positions do NOT appear in mantle_getTokenBalances — always call this when checking a wallet's full balance or portfolio.",
     cli_command: "mantle-cli lp lb-positions --owner <address> --json",
     example: "{ \"owner\": \"0x1234...\" }",
-    tags: ["LP", "position", "LB", "Merchant Moe", "bin", "wallet"]
+    tags: ["LP", "position", "LB", "Merchant Moe", "bin", "wallet", "balance", "portfolio", "hidden assets"]
   },
   {
     id: "mantle_suggestTickRange",
