@@ -11,6 +11,7 @@
     "test:lp:dry":    "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-lp.ts",
     "test:aave":      "node --env-file-if-exists=.env --import tsx src/scenario-aave.ts",
     "test:aave:dry":  "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-aave.ts",
+    "test:dry-run":   "node --env-file-if-exists=.env --import tsx src/scenario-dry-run.ts",
     "setup:links":    "node src/setup-links.mjs",
     "debug:positions":"node --import tsx src/debug-positions.ts",
     "debug:tools":    "node src/debug-tools.mjs",

@@ -38,6 +38,7 @@ import {
   DRY_RUN,
   approveIfNeeded,
   readBalance,
+  resetAllowance,
   trackTx,
   runScenario,
   wallet,
@@ -193,6 +194,20 @@ test("Aave: cleanup any pre-existing positions (reset to clean state)", async ()
           .join(", "),
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Setup: zero out all relevant allowances before the scenario begins so that
+// every approve step runs (no "already sufficient" skips from a prior run).
+// ---------------------------------------------------------------------------
+
+test("Setup: reset WMNT/USDT0 allowances for Moe + Aave to 0", async () => {
+  const w = wallet();
+  await resetAllowance(w, WMNT,  MOE_LB_ROUTER, "Moe LB Router");
+  await resetAllowance(w, WMNT,  AAVE_POOL,     "Aave Pool");
+  await resetAllowance(w, USDT0, MOE_LB_ROUTER, "Moe LB Router");
+  await resetAllowance(w, USDT0, AAVE_POOL,     "Aave Pool");
+  setDetails({ allowances_reset: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -585,9 +600,78 @@ test("Aave: verify positions empty", async () => {
   assertEqual(nonZero.length, 0, "residual Aave positions");
 });
 
-// Silence unused-import warnings if TS is strict about it.
-// (parseUnits is used in the USDT0 swap sanity check; formatEther/formatUnits
-// are used throughout. Nothing to silence.)
+// ---------------------------------------------------------------------------
+// Teardown: restore wallet to the state it was in before the scenario.
+//
+// After the Aave roundtrip the wallet holds the USDT0 acquired in step 1 (the
+// Aave supply → withdraw cycle returns it, minus the 0.05 borrowed + interest).
+// Swap it all back to WMNT, then zero out every allowance so the next run
+// encounters a clean state and exercises every approve step.
+// ---------------------------------------------------------------------------
+
+test("Teardown: swap all USDT0 back to WMNT on Moe", async () => {
+  const w = wallet();
+  if (DRY_RUN) {
+    setDetails({ skipped: true, reason: "dry_run" });
+    return;
+  }
+
+  const usdt0Balance = await readBalance(w, USDT0);
+  const MIN_SWAP = parseUnits("0.001", 6); // skip dust < 0.001 USDT0
+  if (usdt0Balance < MIN_SWAP) {
+    console.log(
+      `  (USDT0 balance ${formatUnits(usdt0Balance, 6)} < 0.001, nothing to swap back)`,
+    );
+    setDetails({ skipped: true, usdt0_balance: formatUnits(usdt0Balance, 6) });
+    return;
+  }
+
+  const swapAmount = formatUnits(usdt0Balance, 6);
+  console.log(`  Swapping ${swapAmount} USDT0 → WMNT on Moe...`);
+
+  const quote = await runCli([
+    "defi", "swap-quote",
+    "--in", "USDT0", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--provider", "merchant_moe",
+  ]);
+  assertEqual(quote.exitCode, 0, "USDT0→WMNT quote exit code");
+  const minOut = quote.json?.minimum_out_raw;
+  assertDefined(minOut, "minimum_out_raw for USDT0→WMNT");
+
+  // Approve USDT0 for the swap; will be reset in the following teardown step.
+  await approveIfNeeded(w, USDT0, MOE_LB_ROUTER, "Moe LB Router");
+
+  const wmntBefore = await readBalance(w, WMNT);
+  const tx = await buildTx([
+    "swap", "build-swap",
+    "--provider", "merchant_moe",
+    "--in", "USDT0", "--out", "WMNT",
+    "--amount", swapAmount,
+    "--recipient", w.address,
+    "--amount-out-min", minOut,
+  ]);
+  const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
+  if (result) {
+    assertEqual(result.receipt.status, "success", "USDT0→WMNT swap status");
+    trackTx(result.hash);
+    const wmntAfter = await readBalance(w, WMNT);
+    setDetails({
+      usdt0_swapped: swapAmount,
+      wmnt_received: formatEther(wmntAfter - wmntBefore),
+    });
+  }
+});
+
+test("Teardown: reset all WMNT/USDT0 allowances to 0", async () => {
+  const w = wallet();
+  // Reset all pairs that were touched during setup, the scenario, and teardown.
+  await resetAllowance(w, WMNT,  MOE_LB_ROUTER, "Moe LB Router");
+  await resetAllowance(w, WMNT,  AAVE_POOL,     "Aave Pool");
+  await resetAllowance(w, USDT0, MOE_LB_ROUTER, "Moe LB Router");
+  await resetAllowance(w, USDT0, AAVE_POOL,     "Aave Pool");
+  setDetails({ allowances_reset: true });
+});
 
 // ---------------------------------------------------------------------------
 // Main

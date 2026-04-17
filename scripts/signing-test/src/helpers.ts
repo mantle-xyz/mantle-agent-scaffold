@@ -70,6 +70,101 @@ export function formatTokenAmount(amountRaw: bigint, token: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Allowance helpers
+// ---------------------------------------------------------------------------
+
+export async function readAllowance(
+  wallet: TestWallet,
+  token: string,
+  spender: string,
+): Promise<bigint> {
+  const result = await runCli([
+    "account", "allowances", wallet.address,
+    "--pairs", `${token}:${spender}`,
+  ]);
+  if (result.exitCode !== 0 || !result.json) {
+    throw new Error(
+      `Failed to read allowance for ${token} → ${spender}: ${result.stderr}`,
+    );
+  }
+  const allowances = result.json.allowances as Array<{
+    allowance_raw: string;
+    error?: string;
+  }>;
+  if (!allowances || allowances.length === 0) {
+    throw new Error(`No allowance data returned for ${token} → ${spender}`);
+  }
+  const entry = allowances[0];
+  if (entry.error) {
+    throw new Error(
+      `Allowance read error for ${token} → ${spender}: ${entry.error}`,
+    );
+  }
+  return BigInt(entry.allowance_raw);
+}
+
+/**
+ * Reset an ERC-20 token allowance to 0 for the given spender via the CLI.
+ *
+ * Uses `mantle-cli approve --token X --spender Y --amount 0` WITHOUT
+ * `--owner`, so the CLI never reads the current allowance and therefore
+ * never short-circuits with `approve_skip`. This guarantees the on-chain
+ * approve(spender, 0) calldata is always built and broadcast.
+ *
+ * Skips (logs only) when DRY_RUN=true or the allowance is already 0.
+ */
+export async function resetAllowance(
+  wallet: TestWallet,
+  token: string,
+  spender: string,
+  spenderName: string,
+): Promise<void> {
+  const symbol = TOKEN_SYMBOL[token] ?? token.slice(0, 8);
+
+  if (DRY_RUN) {
+    console.log(`  [DRY RUN] Would reset ${symbol} → ${spenderName} allowance to 0`);
+    return;
+  }
+
+  const current = await readAllowance(wallet, token, spender);
+
+  if (current === 0n) {
+    console.log(`  (${symbol} → ${spenderName}: already 0, skip)`);
+    return;
+  }
+
+  console.log(
+    `  Resetting ${symbol} → ${spenderName}: ` +
+    `${formatUnits(current, TOKEN_DECIMALS[token] ?? 18)} → 0`,
+  );
+
+  // Build approve(spender, 0) — "revoke" bypasses the CLI's positive-amount
+  // guard and the "already sufficient" skip, so approve(revoke) is always built.
+  const tx = await buildTx([
+    "approve",
+    "--token", token,
+    "--spender", spender,
+    "--amount", "revoke",
+  ]);
+
+  if (tx.intent === "approve_skip") {
+    // "approve_revoke" bypasses the skip guard, so this should never happen.
+    console.log(`  (approve_skip returned unexpectedly on revoke — treating as already 0)`);
+    return;
+  }
+
+  const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: false });
+  if (result) {
+    if (result.receipt.status !== "success") {
+      throw new Error(
+        `Failed to reset ${symbol} → ${spenderName} allowance (tx ${result.hash})`,
+      );
+    }
+    trackTx(result.hash);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // LB pair on-chain helpers
 // ---------------------------------------------------------------------------
 

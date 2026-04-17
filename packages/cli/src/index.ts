@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { MantleMcpError } from "@mantleio/mantle-core/errors.js";
+import { MantleMcpError, toErrorPayload } from "@mantleio/mantle-core/errors.js";
 import { disableColors, formatError, formatJson } from "./formatter.js";
 import { applyRpcOverride } from "./utils.js";
 import { registerChain } from "./commands/chain.js";
@@ -58,16 +58,18 @@ registerUtils(program);
 program.parseAsync(process.argv).catch((error) => {
   const globals = program.opts();
   if (error instanceof MantleMcpError) {
+    const payload = toErrorPayload(error);
     if (globals.json) {
-      formatJson({
-        error: true,
-        code: error.code,
-        message: error.message,
-        suggestion: error.suggestion,
-        details: error.details
-      });
+      formatJson(payload);
     } else {
+      // In human-readable mode, print the stop instruction first if present
+      if (payload._stop_instruction) {
+        console.error(String(payload._stop_instruction));
+      }
       formatError({ code: error.code, message: error.message, suggestion: error.suggestion });
+      if (error.questionForUser) {
+        console.error(`  Question: ${error.questionForUser}`);
+      }
     }
     process.exit(1);
   }
@@ -77,7 +79,9 @@ program.parseAsync(process.argv).catch((error) => {
       error: true,
       code: "INTERNAL_ERROR",
       message: error instanceof Error ? error.message : String(error),
-      suggestion: "Retry the operation or check server logs."
+      suggestion: "Retry the operation or check server logs.",
+      requires_user_input: false,
+      retryable: false
     });
   } else {
     formatError({ message: error instanceof Error ? error.message : String(error) });

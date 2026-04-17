@@ -270,6 +270,64 @@ async function resolveToken(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Balance preflight helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check that `owner` holds at least `required` units of an ERC-20 token.
+ * Throws INSUFFICIENT_BALANCE if not. Skips the check when required === MAX_UINT256
+ * (e.g. amount='max' for repay/withdraw — the chain bounds it to actual debt/balance).
+ * Callers should wrap this in a try/catch that re-throws only INSUFFICIENT_BALANCE
+ * and swallows unrelated RPC failures (same pattern as the allowance checks).
+ */
+async function checkErc20Balance(
+  client: ReturnType<typeof getPublicClient>,
+  token: { address: string; symbol: string; decimals: number },
+  required: bigint,
+  owner: string
+): Promise<void> {
+  if (required === MAX_UINT256) return;
+  const balance = (await client.readContract({
+    address: token.address as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [owner as `0x${string}`]
+  })) as bigint;
+  if (balance < required) {
+    const current = formatUnits(balance, token.decimals);
+    const needed  = formatUnits(required, token.decimals);
+    throw new MantleMcpError(
+      "INSUFFICIENT_BALANCE",
+      `${token.symbol} balance for ${owner} is ${current}, but this operation requires ${needed}.`,
+      `Fund the wallet with at least ${needed} ${token.symbol}, or reduce the amount.`,
+      { token: token.symbol, required: needed, current_balance: current, owner }
+    );
+  }
+}
+
+/**
+ * Check that `owner` holds at least `required` native MNT.
+ * Throws INSUFFICIENT_BALANCE if not.
+ */
+async function checkNativeBalance(
+  client: ReturnType<typeof getPublicClient>,
+  required: bigint,
+  owner: string
+): Promise<void> {
+  const balance = await client.getBalance({ address: owner as `0x${string}` });
+  if (balance < required) {
+    const current = formatUnits(balance, 18);
+    const needed  = formatUnits(required, 18);
+    throw new MantleMcpError(
+      "INSUFFICIENT_BALANCE",
+      `MNT balance for ${owner} is ${current}, but this operation requires ${needed} MNT.`,
+      `Fund the wallet with at least ${needed} MNT, or reduce the amount.`,
+      { token: "MNT", required: needed, current_balance: current, owner }
+    );
+  }
+}
+
 function requirePositiveAmount(
   input: unknown,
   fieldName: string,
@@ -542,8 +600,13 @@ export async function buildApprove(
   const spender = requireAddress(args.spender, "spender");
   const tokenInput = requireString(args.token, "token");
   const resolved = await resolveToken(d, tokenInput, network);
+  // "revoke" (or "0") sets allowance to zero; bypasses the positive-amount guard
+  // and the "already sufficient" skip so approve(spender, 0) is always built.
+  const isRevoke = args.amount === "revoke" || args.amount === "0";
   const amountRaw = args.amount === "max" || args.amount === "unlimited"
     ? MAX_UINT256
+    : isRevoke
+    ? 0n
     : requirePositiveAmount(args.amount, "amount", resolved.decimals);
 
   // Whitelist enforcement
@@ -575,8 +638,9 @@ export async function buildApprove(
     }
   }
 
-  // If allowance is already sufficient, skip
-  if (existingAllowance !== null && existingAllowance >= amountRaw) {
+  // If allowance is already sufficient, skip.
+  // Never skip for revoke — approve(spender, 0) must always be built.
+  if (!isRevoke && existingAllowance !== null && existingAllowance >= amountRaw) {
     const existingDecimal = formatUnits(existingAllowance, resolved.decimals);
     return {
       intent: "approve_skip",
@@ -598,6 +662,8 @@ export async function buildApprove(
   const amountDecimal =
     amountRaw === MAX_UINT256
       ? "unlimited"
+      : isRevoke
+      ? "0 (revoke)"
       : formatUnits(amountRaw, resolved.decimals);
 
   const data = encodeFunctionData({
@@ -614,8 +680,10 @@ export async function buildApprove(
   }
 
   return {
-    intent: "approve",
-    human_summary: `Approve ${amountDecimal} ${resolved.symbol} for ${spenderLabel}`,
+    intent: isRevoke ? "approve_revoke" : "approve",
+    human_summary: isRevoke
+      ? `Revoke ${resolved.symbol} approval for ${spenderLabel} (set allowance to 0)`
+      : `Approve ${amountDecimal} ${resolved.symbol} for ${spenderLabel}`,
     unsigned_tx: {
       to: resolved.address,
       data,
@@ -641,6 +709,25 @@ export async function buildWrapMnt(
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
 
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  const wrapSender = typeof args.sender === "string" && isAddress(args.sender, { strict: false })
+    ? getAddress(args.sender)
+    : null;
+  const wrapWarnings: string[] = [];
+  if (wrapSender) {
+    try {
+      const client = d.getClient(network);
+      // Add a gas buffer: deposit() costs ~20k–30k gas. At 50k gas × 20 Gwei = 0.001 MNT
+      // safety margin so a wallet with exactly `amount` MNT doesn't pass preflight
+      // and then fail on broadcast with "insufficient funds for gas * price + value".
+      const GAS_BUFFER_MNT = 50_000n * 20_000_000_000n;
+      await checkNativeBalance(client, amountRaw + GAS_BUFFER_MNT, wrapSender);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      wrapWarnings.push("Could not verify MNT balance (RPC error). Proceeding without balance check.");
+    }
+  }
+
   const data = encodeFunctionData({
     abi: WMNT_ABI,
     functionName: "deposit"
@@ -655,7 +742,7 @@ export async function buildWrapMnt(
       value: "0x" + amountRaw.toString(16),
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings: wrapWarnings,
     built_at_utc: d.now()
   };
 }
@@ -674,6 +761,22 @@ export async function buildUnwrapMnt(
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
 
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  const unwrapSender = typeof args.sender === "string" && isAddress(args.sender, { strict: false })
+    ? getAddress(args.sender)
+    : null;
+  const unwrapWarnings: string[] = [];
+  if (unwrapSender) {
+    try {
+      const client = d.getClient(network);
+      const wmnt = wmntAddress(network);
+      await checkErc20Balance(client, { address: wmnt, symbol: "WMNT", decimals: 18 }, amountRaw, unwrapSender);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      unwrapWarnings.push("Could not verify WMNT balance (RPC error). Proceeding without balance check.");
+    }
+  }
+
   const data = encodeFunctionData({
     abi: WMNT_ABI,
     functionName: "withdraw",
@@ -689,7 +792,7 @@ export async function buildUnwrapMnt(
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings: unwrapWarnings,
     built_at_utc: d.now()
   };
 }
@@ -1090,6 +1193,14 @@ export async function buildSwap(
       // Re-throw our own INSUFFICIENT_ALLOWANCE error only; swallow unrelated RPC failures.
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
       // Non-critical RPC failure — proceed without allowance check
+    }
+    // ── Balance pre-check (blocking) ─────────────────────────────────
+    try {
+      const client = d.getClient(network);
+      await checkErc20Balance(client, tokenIn, amountInRaw, swapOwner);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      swapWarnings.push(`Could not verify ${tokenIn.symbol} balance (RPC error). Proceeding without balance check.`);
     }
   }
 
@@ -1906,6 +2017,23 @@ export async function buildAddLiquidity(
     } catch (err) {
       // Re-throw our own INSUFFICIENT_ALLOWANCE only; swallow unrelated RPC failures.
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
+    }
+    // ── Balance pre-check (blocking) ─────────────────────────────────
+    const client = d.getClient(network);
+    const balTokens = [
+      { sym: tokenA.symbol, check: checkErc20Balance(client, tokenA, amountARaw, lpOwner) },
+      { sym: tokenB.symbol, check: checkErc20Balance(client, tokenB, amountBRaw, lpOwner) }
+    ];
+    const balSettled = await Promise.allSettled(balTokens.map(t => t.check));
+    for (let i = 0; i < balSettled.length; i++) {
+      const result = balSettled[i];
+      if (result.status === "rejected") {
+        const err = result.reason;
+        if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+        warnings.push(
+          `Could not verify ${balTokens[i].sym} balance (RPC error). Proceeding without balance check — the tx may revert if balance is insufficient.`
+        );
+      }
     }
   }
 
@@ -3187,6 +3315,20 @@ export async function buildAaveSupply(
   const poolAddress = getContractAddress("aave_v3", "pool", network);
   const amountDecimal = formatUnits(amountRaw, asset.decimals);
 
+  // Declare warnings early so the balance-check catch block can push to it.
+  const warnings: string[] = [
+    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
+  ];
+
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  try {
+    const client = d.getClient(network);
+    await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
+  } catch (err) {
+    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    warnings.push(`Could not verify ${reserve.symbol} balance (RPC error). Proceeding without balance check.`);
+  }
+
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
     functionName: "supply",
@@ -3197,10 +3339,6 @@ export async function buildAaveSupply(
       0 // referralCode
     ]
   });
-
-  const warnings: string[] = [
-    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before supplying.`
-  ];
 
   // ── Isolation Mode warning (includes collateral check guidance) ─────
   if (reserve.isolationMode) {
@@ -3441,6 +3579,20 @@ export async function buildAaveRepay(
 
   const poolAddress = getContractAddress("aave_v3", "pool", network);
 
+  // Declare warnings early so the balance-check catch block can push to it.
+  const repayWarnings: string[] = [
+    `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before repaying.`
+  ];
+
+  // ── Balance pre-check (blocking) — skipped when amount='max' (MAX_UINT256) ─
+  try {
+    const client = d.getClient(network);
+    await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
+  } catch (err) {
+    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    repayWarnings.push(`Could not verify ${reserve.symbol} balance (RPC error). Proceeding without balance check.`);
+  }
+
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
     functionName: "repay",
@@ -3462,9 +3614,7 @@ export async function buildAaveRepay(
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [
-      `Ensure ${reserve.symbol} is approved for the Aave Pool (${poolAddress}) before repaying.`
-    ],
+    warnings: repayWarnings,
     aave_reserve: {
       symbol: reserve.symbol,
       underlying: reserve.underlying,
@@ -3502,6 +3652,28 @@ export async function buildAaveWithdraw(
       : formatUnits(amountRaw, asset.decimals);
 
   const poolAddress = getContractAddress("aave_v3", "pool", network);
+
+  // ── aToken balance pre-check (blocking) — skipped when amount='max' ──────
+  // In Aave V3 withdraw(asset, amount, to), the CALLER's (msg.sender's) aTokens
+  // are burned, not `to`'s. `to` is only the recipient of the underlying tokens.
+  // We check the signer's aToken balance via the optional `owner` param.
+  // When `owner` is omitted the check is skipped (no false positives on `to`).
+  const withdrawOwner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
+    ? getAddress(args.owner)
+    : null;
+  if (withdrawOwner) {
+    try {
+      const client = d.getClient(network);
+      await checkErc20Balance(
+        client,
+        { address: reserve.aToken, symbol: `a${reserve.symbol}`, decimals: reserve.decimals },
+        amountRaw,
+        withdrawOwner
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+    }
+  }
 
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
@@ -4028,7 +4200,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildWrapMnt: {
     name: "mantle_buildWrapMnt",
     description:
-      "Build an unsigned transaction to wrap MNT into WMNT. Returns calldata with value field set to the wrap amount.\n\nExamples:\n- Wrap 10 MNT: amount='10', sender='0x<signing_wallet>'\n- Wrap 0.5 MNT: amount='0.5'",
+      "Build an unsigned transaction to wrap MNT into WMNT. Returns calldata with value field set to the wrap amount.\n\nIf sender is provided, performs a blocking MNT balance check — throws INSUFFICIENT_BALANCE if the wallet cannot cover the amount.\n\nExamples:\n- Wrap 10 MNT: amount='10', sender='0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'\n- Wrap 0.5 MNT: amount='0.5'",
     inputSchema: {
       type: "object",
       properties: {
@@ -4061,7 +4233,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildUnwrapMnt: {
     name: "mantle_buildUnwrapMnt",
     description:
-      "Build an unsigned transaction to unwrap WMNT back to MNT.\n\nExamples:\n- Unwrap 10 WMNT: amount='10', sender='0x<signing_wallet>'\n- Unwrap 0.5 WMNT: amount='0.5'",
+      "Build an unsigned transaction to unwrap WMNT back to MNT.\n\nIf sender is provided, performs a blocking WMNT balance check — throws INSUFFICIENT_BALANCE if the wallet cannot cover the amount.\n\nExamples:\n- Unwrap 10 WMNT: amount='10', sender='0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'\n- Unwrap 0.5 WMNT: amount='0.5'",
     inputSchema: {
       type: "object",
       properties: {
@@ -4094,7 +4266,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69… for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69888b0d11cEC22caA5034e25FfFBDc88421 for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
