@@ -214,15 +214,14 @@ describe("buildAaveSetCollateral", () => {
     expect(isoWarning).toBeDefined();
   });
 
-  it("skips preflight when no user is provided", async () => {
-    const result = (await buildAaveSetCollateral(
-      { asset: "WMNT" },
-      mockDeps({})
-    )) as any;
-
-    expect(result.diagnostics.diagnosis).toBe("preflight_skipped");
-    const skipWarning = result.warnings.find((w: string) => w.includes("preflight diagnostics were skipped"));
-    expect(skipWarning).toBeDefined();
+  it("requires owner (deterministic contract) — rejects when owner is missing", async () => {
+    // With the deterministic unsigned_tx contract, owner is mandatory:
+    // setUserUseReserveAsCollateral operates on msg.sender, and we MUST pin
+    // gas/nonce against a real signer. Missing owner is a hard failure, not
+    // a "skip preflight" degraded mode.
+    await expect(
+      buildAaveSetCollateral({ asset: "WMNT" }, mockDeps({}))
+    ).rejects.toThrow(/owner/i);
   });
 
   it("handles RPC errors gracefully during preflight", async () => {

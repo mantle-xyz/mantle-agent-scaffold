@@ -19,12 +19,14 @@ const mockEstimateGas = vi.fn<() => Promise<bigint>>();
 const mockGetBlock = vi.fn<() => Promise<{ baseFeePerGas: bigint | null }>>();
 const mockEstimateMaxPriorityFeePerGas = vi.fn<() => Promise<bigint>>();
 const mockReadContract = vi.fn<() => Promise<bigint>>();
+const mockGetTransactionCount = vi.fn<() => Promise<number>>();
 
 const mockClient = {
   estimateGas: mockEstimateGas,
   getBlock: mockGetBlock,
   estimateMaxPriorityFeePerGas: mockEstimateMaxPriorityFeePerGas,
   readContract: mockReadContract,
+  getTransactionCount: mockGetTransactionCount,
 };
 
 vi.mock("@mantleio/mantle-core/lib/clients.js", () => ({
@@ -86,6 +88,7 @@ function setupDefaultMocks() {
   mockGetBlock.mockResolvedValue({ baseFeePerGas: 50_000_000n } as any);
   mockEstimateMaxPriorityFeePerGas.mockResolvedValue(2_000_000n);
   mockReadContract.mockResolvedValue(BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+  mockGetTransactionCount.mockResolvedValue(42);
 }
 
 const handler = defiWriteTools["mantle_buildSwap"].handler;
@@ -121,25 +124,26 @@ describe("wrapBuildHandler gas estimation", () => {
     expect((call.account as string).toLowerCase()).toBe(OWNER.toLowerCase());
   });
 
-  it("skips gas estimation and warns when no sender provided", async () => {
+  it("hard-fails with MISSING_SIGNER when no sender provided (deterministic contract)", async () => {
     setupDefaultMocks();
 
     const argsNoOwner = { ...swapArgsWithOwner };
     delete (argsNoOwner as any).owner;
 
-    const result = await handler(argsNoOwner, baseDeps);
-    const tx = result.unsigned_tx;
+    // With the deterministic unsigned_tx contract we now REFUSE to build
+    // without a signer. This is the opposite of the old behavior.
+    try {
+      await handler(argsNoOwner, baseDeps);
+      throw new Error("expected handler to throw MISSING_SIGNER");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("MISSING_SIGNER");
+    }
 
-    // No gas fields set
-    expect(tx.gas).toBeUndefined();
-    expect(tx.maxFeePerGas).toBeUndefined();
-    expect(tx.maxPriorityFeePerGas).toBeUndefined();
-
-    // Warning about missing sender
-    expect(result.warnings.some((w: string) => w.includes("Gas not estimated"))).toBe(true);
-
-    // getPublicClient should not have been called for estimation
+    // No on-chain probing should have happened — we failed before building.
     expect(mockEstimateGas).not.toHaveBeenCalled();
+    expect(mockGetTransactionCount).not.toHaveBeenCalled();
   });
 
   it("sets gas but omits EIP-1559 fields when baseFeePerGas is null", async () => {
@@ -147,6 +151,7 @@ describe("wrapBuildHandler gas estimation", () => {
     mockGetBlock.mockResolvedValue({ baseFeePerGas: null } as any);
     mockEstimateMaxPriorityFeePerGas.mockResolvedValue(2_000_000n);
     mockReadContract.mockResolvedValue(BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+    mockGetTransactionCount.mockResolvedValue(7);
 
     const result = await handler(swapArgsWithOwner, baseDeps);
     const tx = result.unsigned_tx;
@@ -168,6 +173,7 @@ describe("wrapBuildHandler gas estimation", () => {
     // Tip below MIN_TIP (1_000_000n = 0.001 Gwei)
     mockEstimateMaxPriorityFeePerGas.mockResolvedValue(500n);
     mockReadContract.mockResolvedValue(BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+    mockGetTransactionCount.mockResolvedValue(9);
 
     const result = await handler(swapArgsWithOwner, baseDeps);
     const tx = result.unsigned_tx;
@@ -185,6 +191,7 @@ describe("wrapBuildHandler gas estimation", () => {
     mockGetBlock.mockResolvedValue({ baseFeePerGas: 50_000_000n } as any);
     mockEstimateMaxPriorityFeePerGas.mockResolvedValue(2_000_000n);
     mockReadContract.mockResolvedValue(BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+    mockGetTransactionCount.mockResolvedValue(1);
 
     try {
       await handler(swapArgsWithOwner, baseDeps);
@@ -197,11 +204,11 @@ describe("wrapBuildHandler gas estimation", () => {
     }
   });
 
-  it("skips gas block entirely when data is '0x' (not a real call)", async () => {
+  it("skip intents are non-broadcastable and carry no gas/fee/nonce fields", async () => {
     setupDefaultMocks();
 
     // Use buildApprove with an already-sufficient allowance — returns intent='approve_skip'
-    // which has data="0x" (empty calldata). This tests the isRealCall guard.
+    // which has data="0x" (empty calldata). This tests the skip short-circuit invariant.
     const approveHandler = defiWriteTools["mantle_buildApprove"].handler;
     const approveResult = await approveHandler(
       {
@@ -222,15 +229,21 @@ describe("wrapBuildHandler gas estimation", () => {
       }
     );
 
-    // approve_skip returns no real calldata — gas estimation should be skipped
-    if (approveResult.intent === "approve_skip") {
-      // No gas fields on skip result
-      expect(approveResult.unsigned_tx?.gas).toBeUndefined();
-      expect(mockEstimateGas).not.toHaveBeenCalled();
-    } else {
-      // If it returned a real approve tx (shouldn't with max allowance), gas estimation
-      // is valid — just verify it doesn't crash
-      expect(approveResult.unsigned_tx).toBeDefined();
-    }
+    // The result MUST be explicitly non-broadcastable — signers keyed off
+    // is_broadcastable know to skip submission even if unsigned_tx looks shaped.
+    expect(approveResult.intent).toBe("approve_skip");
+    expect((approveResult as any).is_broadcastable).toBe(false);
+
+    // A skip result must NOT carry gas / fee / nonce fields, because any such
+    // field would tempt a naive signer into burning a real nonce on a no-op tx.
+    const tx = (approveResult as any).unsigned_tx ?? {};
+    expect(tx.gas).toBeUndefined();
+    expect(tx.maxFeePerGas).toBeUndefined();
+    expect(tx.maxPriorityFeePerGas).toBeUndefined();
+    expect(tx.nonce).toBeUndefined();
+
+    // No on-chain gas or nonce probing should have happened for a skip.
+    expect(mockEstimateGas).not.toHaveBeenCalled();
+    expect(mockGetTransactionCount).not.toHaveBeenCalled();
   });
 });

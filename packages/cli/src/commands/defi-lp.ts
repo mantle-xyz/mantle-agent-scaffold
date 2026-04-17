@@ -152,7 +152,7 @@ export function registerLp(parent: Command): void {
     )
     .option("--ids <json>", "bin IDs to remove from as JSON array. For merchant_moe. Optional with --percentage.")
     .option("--amounts <json>", "LP token balances (balance_raw) per bin as JSON array of strings. For merchant_moe. Use --percentage instead for automatic mode.")
-    .option("--owner <address>", "wallet address that holds the LP tokens (the signer). For merchant_moe percentage mode when signer differs from recipient.")
+    .requiredOption("--owner <address>", "wallet address that holds the LP tokens (the signer). Required for deterministic nonce/gas pinning.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const provider = String(opts.provider).toLowerCase();
@@ -494,12 +494,14 @@ export function registerLp(parent: Command): void {
     .requiredOption("--provider <provider>", "DEX provider: agni or fluxion")
     .requiredOption("--token-id <id>", "V3 NFT position token ID")
     .requiredOption("--recipient <address>", "address to receive collected fees")
+    .requiredOption("--owner <address>", "NFT owner (the signer). Required for deterministic nonce/gas pinning.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const result = await allTools["mantle_buildCollectFees"].handler({
         provider: opts.provider,
         token_id: opts.tokenId,
         recipient: opts.recipient,
+        owner: opts.owner,
         network: globals.network
       });
       if (globals.json) {

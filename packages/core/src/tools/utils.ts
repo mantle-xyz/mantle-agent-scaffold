@@ -385,16 +385,30 @@ async function buildRawTxHandler(
   if (nonceArg != null) {
     unsignedTx.nonce = nonceArg;
   }
-  const idempotencyParts = [
+  const idempotencyParts: string[] = [
     sender ?? "*",
     requestId ?? "*",
     unsignedTx.to,
     unsignedTx.data,
     unsignedTx.value,
-    String(unsignedTx.chainId)
-  ].join(":");
+    String(unsignedTx.chainId),
+  ];
+  if (nonceArg !== null) {
+    // Rule: include the nonce in the idempotency key when (and only when)
+    // a nonce is pinned into unsigned_tx. `mantle_buildRawTx` only pins a
+    // nonce on explicit override (stuck-tx replacement) — in all other
+    // paths the signer picks its own nonce, so the unsigned_tx is not
+    // deterministic w.r.t. nonce and the key deliberately doesn't commit
+    // to one.
+    //
+    // Two distinct replacement attempts at two distinct nonces are
+    // genuinely different transactions and must bypass dedupe; pinning
+    // the nonce into the key gives them distinct hashes.
+    idempotencyParts.push("nonce:" + String(nonceArg));
+  }
+  const idempotencyPayload = idempotencyParts.join(":");
   const idempotencyKey = keccak256(
-    toHex(new TextEncoder().encode(idempotencyParts))
+    toHex(new TextEncoder().encode(idempotencyPayload))
   );
 
   return {
@@ -414,7 +428,14 @@ async function buildRawTxHandler(
         "The calldata, target address, and value have NOT been validated against known protocol ABIs. " +
         "Verify all fields carefully before signing.",
       "Gas fields (gas, maxFeePerGas, maxPriorityFeePerGas) are NOT pre-estimated for raw transactions. " +
-        "The signer MUST call eth_estimateGas and populate fee parameters before broadcasting."
+        "The signer MUST call eth_estimateGas and populate fee parameters before broadcasting.",
+      ...(sender && nonceArg === null
+        ? [
+            "Nonce not set: mantle_buildRawTx is a pure-computation tool and does not fetch the " +
+              "pending nonce automatically. Call mantle_getNonce for the sender address and pass " +
+              "the result as the nonce arg to ensure the transaction is fully deterministic."
+          ]
+        : []),
     ],
     built_at_utc: nowUtc()
   };

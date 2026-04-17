@@ -112,7 +112,7 @@ async function approveIfNeeded(
 
 test("Wrap MNT → WMNT", async () => {
   const before = await readBalance(WMNT as `0x${string}`);
-  const tx = await buildTx(["swap", "wrap-mnt", "--amount", WRAP_AMOUNT]);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", WRAP_AMOUNT, "--sender", wallet.address]);
   const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "tx status");
@@ -145,6 +145,7 @@ test("Swap WMNT → USDC (prepare LP pair)", async () => {
     "--in", "WMNT", "--out", "USDC",
     "--amount", SWAP_FOR_USDC,
     "--recipient", wallet.address,
+    "--owner", wallet.address,
     "--amount-out-min", minOut,
   ]);
   const result = await signAndSend(wallet, tx.unsigned_tx, { dryRun: DRY_RUN });

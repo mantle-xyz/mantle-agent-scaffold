@@ -115,7 +115,11 @@ export async function runAllTests(): Promise<TestResult[]> {
     for (const r of results.filter(r => !r.passed)) {
       console.log(chalk.red(`  - ${r.name}`));
       if (r.error) {
-        console.log(chalk.gray(`    ${r.error.split("\n")[0]}`));
+        // Print the full error (multi-line) indented — swallowing everything
+        // after the first newline hides CLI stderr/stdout when a subprocess fails.
+        for (const line of r.error.split("\n")) {
+          console.log(chalk.gray(`    ${line}`));
+        }
       }
     }
     console.log();

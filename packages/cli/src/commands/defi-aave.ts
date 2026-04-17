@@ -126,12 +126,14 @@ export function registerAave(parent: Command): void {
     .requiredOption("--asset <token>", "token symbol or address to withdraw")
     .requiredOption("--amount <amount>", "decimal amount to withdraw, or 'max' for full balance")
     .requiredOption("--to <address>", "address to receive the withdrawn tokens")
+    .requiredOption("--owner <address>", "aToken holder / signer. Required for deterministic nonce/gas pinning.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const result = await allTools["mantle_buildAaveWithdraw"].handler({
         asset: opts.asset,
         amount: String(opts.amount),
         to: opts.to,
+        owner: opts.owner,
         network: globals.network
       });
       if (globals.json) {
@@ -147,16 +149,16 @@ export function registerAave(parent: Command): void {
     .description(
       "Build unsigned Aave V3 transaction to enable/disable a supplied asset as collateral. " +
       "The tx operates on msg.sender (the signing wallet). " +
-      "Use --user for preflight diagnostics (checks aToken balance, LTV, collateral status)."
+      "The --owner arg identifies the signer AND drives preflight diagnostics (aToken balance, LTV, collateral status)."
     )
     .requiredOption("--asset <token>", "token symbol or address")
-    .option("--user <address>", "wallet address for preflight diagnostics (not encoded in tx)")
+    .requiredOption("--owner <address>", "signer / aToken holder. Required for deterministic nonce/gas pinning.")
     .option("--disable", "disable as collateral (default: enable)")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const result = await allTools["mantle_buildAaveSetCollateral"].handler({
         asset: opts.asset,
-        user: opts.user,
+        owner: opts.owner,
         use_as_collateral: !opts.disable,
         network: globals.network
       });

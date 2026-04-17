@@ -56,7 +56,7 @@ test("Ensure WMNT balance (wrap MNT if needed)", async () => {
 
   const needed = target - wmntBalance;
   const wrapAmount = formatEther(needed);
-  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount]);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount, "--sender", w.address]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "wrap tx status");
@@ -101,6 +101,8 @@ test("Moe: swap WMNT → USDe", async () => {
     "--amount-out-min", minOut,
   ]);
   assertEqual(tx.unsigned_tx.to.toLowerCase(), MOE_LB_ROUTER.toLowerCase(), "to == Moe LB Router");
+  // nonce must be pinned at build time so Privy receives a fully deterministic transaction.
+  assertEqual(typeof tx.unsigned_tx.nonce, "number", "unsigned_tx.nonce should be a number");
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "tx status");

@@ -133,6 +133,9 @@ export interface UnsignedTx {
   gas?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
+  /** Nonce pinned at build time by wrapBuildHandler. Must be forwarded as-is
+   *  to the wallet — do NOT let viem auto-assign a nonce when this is present. */
+  nonce?: number;
 }
 
 export interface SignAndSendResult {
@@ -155,6 +158,7 @@ export async function signAndSend(
     console.log(`    data:  ${unsignedTx.data.length > 20 ? unsignedTx.data.slice(0, 20) + "..." : unsignedTx.data}`);
     console.log(`    value: ${unsignedTx.value}`);
     console.log(`    chain: ${unsignedTx.chainId}`);
+    if (unsignedTx.nonce !== undefined) console.log(`    nonce: ${unsignedTx.nonce}`);
     if (unsignedTx.gas) console.log(`    gas:   ${unsignedTx.gas}`);
     return null;
   }
@@ -186,6 +190,11 @@ export async function signAndSend(
   }
   if (unsignedTx.maxPriorityFeePerGas) {
     txParams.maxPriorityFeePerGas = BigInt(unsignedTx.maxPriorityFeePerGas);
+  }
+  // Forward nonce pinned at build time — prevents viem from auto-assigning a
+  // new nonce and causing the same transaction to be broadcast multiple times.
+  if (unsignedTx.nonce !== undefined) {
+    txParams.nonce = unsignedTx.nonce;
   }
 
   const hash = await wallet.walletClient.sendTransaction(txParams);

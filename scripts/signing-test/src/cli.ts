@@ -73,6 +73,10 @@ export async function buildTx(
     gas?: string;
     maxFeePerGas?: string;
     maxPriorityFeePerGas?: string;
+    /** Pending nonce fetched from the chain at build time.
+     *  Present whenever a sender/owner/on_behalf_of address was provided.
+     *  Must be forwarded as-is to the signer — do NOT let viem auto-assign. */
+    nonce?: number;
   };
   warnings: string[];
   [key: string]: unknown;

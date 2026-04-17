@@ -343,7 +343,7 @@ function getContractAddress(
 // ---------------------------------------------------------------------------
 // Idempotency key — deterministic, signer-scoped hash for deduplication.
 //
-// Key = keccak256(sender + request_id + to + data + value + chainId)
+// Key = keccak256(sender + request_id + to + data + value + chainId [+ nonce])
 //
 // • `sender` scopes the key to a specific wallet so two different signers
 //   building the same calldata do NOT collide.
@@ -351,12 +351,36 @@ function getContractAddress(
 //   can legitimately submit identical payloads for different user requests.
 // • When neither is supplied the key still covers the calldata, but the
 //   signer SHOULD inject its own address before deduplication.
+//
+// NONCE INCLUSION RULE: the pinned nonce goes into the key whenever it is
+// pinned into unsigned_tx — which, post-nonce-pinning, is always the case
+// for broadcastable builds (via mempool fetch or explicit override).
+//
+// Why: once the builder commits a specific nonce into the transaction, two
+// rebuilds of the same user intent that see DIFFERENT pending nonces (e.g.
+// because an unrelated wallet tx advanced the counter in between) produce
+// materially distinct transactions. If the dedupe key excluded nonce, the
+// executor — following the documented "same key ⇒ don't broadcast" rule —
+// would swallow the legitimate retry, leaving the operation wedged until
+// someone manually bumped `request_id`.
+//
+// An earlier revision excluded the auto-fetched nonce from the key on the
+// theory that "a retry of the same user intent should map to the same key"
+// — but that reasoning predates nonce pinning. Once the nonce is ALSO
+// pinned into the tx being signed, dedupe must track it or the contract
+// breaks under concurrent-wallet activity. Nonce-reuse safety is still
+// enforced by the pin itself; the key now just stays in lock-step.
+//
+// SKIP INTENTS: skip results (intent ending in `_skip`) never pin a nonce,
+// so the key is computed with `explicitNonce = null` — same shape across
+// retries of a no-op decision.
 // ---------------------------------------------------------------------------
 
 function computeIdempotencyKey(
   unsignedTx: { to: string; data: string; value: string; chainId: number },
   sender: string | null,
-  requestId: string | null
+  requestId: string | null,
+  explicitNonce: number | null
 ): string {
   const parts = [
     sender ?? "*",            // "*" = not scoped to a wallet
@@ -364,8 +388,12 @@ function computeIdempotencyKey(
     unsignedTx.to,
     unsignedTx.data,
     unsignedTx.value,
-    String(unsignedTx.chainId)
+    String(unsignedTx.chainId),
   ];
+  if (explicitNonce !== null) {
+    // Pinned nonce participates in the key — see file-level rationale.
+    parts.push("nonce:" + String(explicitNonce));
+  }
   const payload = parts.join(":");
   const encoded = toHex(new TextEncoder().encode(payload));
   return keccak256(encoded);
@@ -437,110 +465,302 @@ function wrapBuildHandler(
         typeof args.request_id === "string" ? args.request_id.trim() : "";
       const requestId = rawRequestId.length > 0 ? rawRequestId : null;
 
-      // Inject optional nonce override from caller args (must be a non-negative integer)
+      // ------------------------------------------------------------------
+      // Skip-intent short-circuit.
+      //
+      // A builder signals "no tx needed" by setting `intent` to a name
+      // ending in `_skip` (e.g. `approve_skip`) AND using a `data: "0x"`
+      // sentinel payload. Example: `buildApprove` detects that the
+      // existing ERC-20 allowance is already ≥ requested amount and
+      // returns `approve_skip` instead of a real `approve(spender,amount)`
+      // calldata.
+      //
+      // These results MUST NOT go through the gas/fee/nonce pipeline:
+      // doing so would turn them into fully-populated 0-value transfers
+      // to the token contract, and a signer that blindly trusts
+      // `unsigned_tx` could burn a real nonce + fee on a no-op send.
+      //
+      // We instead stamp `is_broadcastable = false`, compute the
+      // idempotency key over the thin shape (no nonce — there isn't one),
+      // and return early. Callers are expected to branch on `intent`
+      // or `is_broadcastable` before attempting to sign.
+      // ------------------------------------------------------------------
+      const intentName =
+        typeof result.intent === "string" ? result.intent : "";
+      const isSkipIntent = intentName.endsWith("_skip");
+
+      if (isSkipIntent) {
+        result.is_broadcastable = false;
+
+        // Idempotency still matters for skips — retries of the same
+        // allowance pre-check should return a matching key so the
+        // executor recognizes it as the same intent. The pending nonce
+        // is intentionally not part of the skip key: no tx will be
+        // broadcast, and the `approve_skip` decision depends on
+        // on-chain allowance state, not on the sender's nonce.
+        const idempotencySender =
+          extractNormalizedAddress(args.sender) ??
+          extractNormalizedAddress(args.owner) ??
+          extractNormalizedAddress(args.on_behalf_of) ??
+          extractNormalizedAddress(args.recipient) ??
+          null;
+        const key = computeIdempotencyKey(
+          result.unsigned_tx,
+          idempotencySender,
+          requestId,
+          /* explicitNonce */ null,
+        );
+        return {
+          ...result,
+          idempotency_key: key,
+          idempotency_scope: {
+            sender: idempotencySender ?? "unscoped",
+            request_id: requestId ?? "none",
+          },
+        };
+      }
+
+      // ------------------------------------------------------------------
+      // Resolve network up front — needed for both gas estimation and the
+      // nonce fetch below. Resolving here (outside try/catch) ensures a bad
+      // network arg surfaces as INVALID_NETWORK, not GAS_ESTIMATION_FAILED.
+      // ------------------------------------------------------------------
+      const { network: net } = normalizeNetwork(args);
+
+      // ------------------------------------------------------------------
+      // Nonce override — when caller pinpoints an explicit nonce (e.g. for
+      // stuck-transaction replacement), pin it immediately and skip the
+      // pending-nonce fetch below.
+      // ------------------------------------------------------------------
       const nonceArg =
         typeof args.nonce === "number" && Number.isInteger(args.nonce) && args.nonce >= 0
           ? args.nonce
           : null;
+
       if (nonceArg != null) {
         result.unsigned_tx.nonce = nonceArg;
       }
 
       // ------------------------------------------------------------------
-      // Gas estimation + EIP-1559 fee pricing — populate gas, maxFeePerGas,
-      // and maxPriorityFeePerGas from the live chain so external signers
-      // (Privy, etc.) that only sign (no estimation) receive a complete tx.
-      // A 20% buffer is added to gasLimit to guard against minor state
-      // changes between estimation and broadcast.
+      // Gas estimation + EIP-1559 fee pricing + pending nonce.
+      //
+      // We populate gas, maxFeePerGas, maxPriorityFeePerGas, and nonce from
+      // the live chain so external signers (Privy, etc.) that only sign
+      // (no estimation) receive a fully deterministic tx. A 20% buffer is
+      // added to gasLimit to guard against minor state changes between
+      // estimation and broadcast.
       //
       // When sender is absent, DeFi operations that check msg.sender
       // (swaps, approvals, Aave) will revert during estimation because
-      // the node simulates as address(0) with zero balance/allowance.
-      // In this case we skip estimation and warn — the signer must
-      // estimate independently.
+      // the node simulates as address(0). In this case we skip estimation
+      // and warn — the signer must estimate and set nonce independently.
+      //
+      // The nonce fetch is attached to the same Promise.all to save a
+      // round-trip, but wrapped in its own result sentinel so RPC failures
+      // on the nonce path surface as NONCE_FETCH_FAILED rather than being
+      // misreported as GAS_ESTIMATION_FAILED.
       // ------------------------------------------------------------------
       const txData = result.unsigned_tx.data;
       const isRealCall = txData && txData !== "0x" && txData.length >= 10;
-      if (isRealCall) {
-        // Resolve network BEFORE the try/catch so a bad network arg surfaces
-        // as INVALID_NETWORK, not as a misleading GAS_ESTIMATION_FAILED.
-        const { network: net } = normalizeNetwork(args);
 
-        if (!sender) {
-          // Cannot estimate reliably without a sender — DeFi contracts
-          // check msg.sender for allowance/balance during simulation.
+      type NonceFetchResult =
+        | { ok: true; value: number | null }
+        | { ok: false; error: unknown };
+
+      const makeNonceFetch = (client: ReturnType<typeof getPublicClient>): Promise<NonceFetchResult> =>
+        nonceArg === null
+          ? client
+              .getTransactionCount({ address: sender as `0x${string}`, blockTag: "pending" })
+              .then((v) => ({ ok: true as const, value: v as number | null }))
+              .catch((e) => ({ ok: false as const, error: e }))
+          : Promise.resolve({ ok: true as const, value: null });
+
+      const throwNonceFetchFailed = (err: unknown): never => {
+        throw new MantleMcpError(
+          "NONCE_FETCH_FAILED",
+          `Failed to fetch pending nonce: ${err instanceof Error ? err.message : String(err)}`,
+          "The nonce could not be retrieved from the RPC. Provide an explicit nonce via " +
+            "the nonce arg, or retry when the node is reachable.",
+          { sender, network: net }
+        );
+      };
+
+      const applyFeeFromBlock = (
+        block: { baseFeePerGas: bigint | null | undefined },
+        maxPriorityFeePerGas: bigint | null,
+      ): void => {
+        const baseFee = block.baseFeePerGas;
+        if (baseFee != null) {
+          // Minimum tip floor: 0.001 Gwei — avoids stuck transactions on
+          // sequencer chains like Mantle that may enforce a minimum tip.
+          const MIN_TIP = 1_000_000n; // 0.001 Gwei
+          const tip =
+            maxPriorityFeePerGas != null && maxPriorityFeePerGas > MIN_TIP
+              ? maxPriorityFeePerGas
+              : MIN_TIP;
+          // maxFeePerGas = 2× baseFee + tip — same heuristic as ethers/viem
+          // to survive 1-2 blocks of fee increases.
+          const maxFee = baseFee * 2n + tip;
+          result.unsigned_tx.maxFeePerGas = "0x" + maxFee.toString(16);
+          result.unsigned_tx.maxPriorityFeePerGas = "0x" + tip.toString(16);
+          // NOTE: do NOT set `type: "0x2"` — Privy and some external signers
+          // reject the field outright. EIP-1559 type is auto-inferred by
+          // viem/ethers from the presence of maxFeePerGas.
+        } else {
+          // Chain does not expose baseFeePerGas — EIP-1559 fields cannot
+          // be populated. Gas limit is still set; the signer may need to
+          // provide gasPrice for legacy transaction types.
           result.warnings = result.warnings ?? [];
           result.warnings.push(
-            "Gas not estimated: no sender address provided (sender/owner/on_behalf_of). " +
-            "The signer MUST call eth_estimateGas before broadcasting."
+            "baseFeePerGas not available from RPC — EIP-1559 fee fields (maxFeePerGas, " +
+            "maxPriorityFeePerGas) are omitted. The signer should set gasPrice for a " +
+            "legacy (type 0) transaction, or provide fee parameters manually."
           );
-        } else {
-          try {
-            const client = getPublicClient(net);
+        }
+      };
 
-            const estimateParams: Record<string, unknown> = {
-              to: result.unsigned_tx.to as `0x${string}`,
-              data: txData as `0x${string}`,
-              value: BigInt(result.unsigned_tx.value ?? "0x0"),
-              account: sender as `0x${string}`,
-            };
-
-            // Fetch gas estimate, latest block (for baseFee), and tip in parallel
-            const [rawEstimate, block, maxPriorityFeePerGas] = await Promise.all([
-              client.estimateGas(estimateParams as any),
-              client.getBlock({ blockTag: "latest" }),
-              client.estimateMaxPriorityFeePerGas().catch(() => null as bigint | null),
-            ]);
-
-            // 20% safety buffer on gas limit
-            const bufferedGas = (rawEstimate * 120n) / 100n;
-            result.unsigned_tx.gas = "0x" + bufferedGas.toString(16);
-
-            // EIP-1559 fee parameters from chain state
-            const baseFee = block.baseFeePerGas;
-            if (baseFee != null) {
-              // Minimum tip floor: 0.001 Gwei — avoids stuck transactions on
-              // sequencer chains like Mantle that may enforce a minimum tip.
-              const MIN_TIP = 1_000_000n; // 0.001 Gwei
-              const tip = maxPriorityFeePerGas != null && maxPriorityFeePerGas > MIN_TIP
-                ? maxPriorityFeePerGas
-                : MIN_TIP;
-              // maxFeePerGas = 2× baseFee + tip — same heuristic as ethers/viem
-              // to survive 1-2 blocks of fee increases
-              const maxFee = baseFee * 2n + tip;
-              result.unsigned_tx.maxFeePerGas = "0x" + maxFee.toString(16);
-              result.unsigned_tx.maxPriorityFeePerGas = "0x" + tip.toString(16);
-              // NOTE: do NOT set `type: "0x2"` — Privy and some external signers
-              // reject the field outright. EIP-1559 type is auto-inferred by
-              // viem/ethers from the presence of maxFeePerGas.
-            } else {
-              // Chain does not expose baseFeePerGas — EIP-1559 fields cannot
-              // be populated. Gas limit is still set; the signer may need to
-              // provide gasPrice for legacy transaction types.
-              result.warnings = result.warnings ?? [];
-              result.warnings.push(
-                "baseFeePerGas not available from RPC — EIP-1559 fee fields (maxFeePerGas, " +
-                "maxPriorityFeePerGas) are omitted. The signer should set gasPrice for a " +
-                "legacy (type 0) transaction, or provide fee parameters manually."
-              );
-            }
-          } catch (err) {
-            throw new MantleMcpError(
-              "GAS_ESTIMATION_FAILED",
-              `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`,
-              "The transaction may revert on-chain. Check that the sender has sufficient balance " +
-                "and that the calldata/target are correct. Do NOT submit without a valid gas estimate.",
-              {
-                to: result.unsigned_tx.to,
-                sender: sender ?? null,
-                intent: result.intent ?? null,
-              }
-            );
+      if (!sender) {
+        // Determinism guarantee: every `unsigned_tx` returned by a build
+        // tool must carry gas, fee, and nonce fields pinned from chain
+        // state, so external signers (Privy, etc.) cannot substitute their
+        // own values. Without a sender address we cannot estimate gas or
+        // fetch the pending nonce — so instead of returning a half-built
+        // tx with warnings (which historically led to signers auto-
+        // assigning a new nonce and causing duplicate broadcasts), we
+        // hard-fail. Callers MUST provide one of sender / owner /
+        // on_behalf_of.
+        throw new MantleMcpError(
+          "MISSING_SIGNER",
+          "No sender address provided — cannot build a deterministic unsigned_tx " +
+            "(gas, fee, nonce all need a sender to pin against).",
+          "Pass the signer address as `sender` (or `owner` / `on_behalf_of`, " +
+            "depending on the builder). Every build* tool requires this for " +
+            "deterministic tx construction.",
+          {
+            to: result.unsigned_tx.to,
+            intent: result.intent ?? null,
           }
+        );
+      }
+
+      if (isRealCall) {
+        const client = getPublicClient(net);
+
+        const estimateParams: Record<string, unknown> = {
+          to: result.unsigned_tx.to as `0x${string}`,
+          data: txData as `0x${string}`,
+          value: BigInt(result.unsigned_tx.value ?? "0x0"),
+          account: sender as `0x${string}`,
+        };
+
+        let rawEstimate: bigint;
+        let block: Awaited<ReturnType<typeof client.getBlock>>;
+        let maxPriorityFeePerGas: bigint | null;
+        let nonceResult: NonceFetchResult;
+        try {
+          [rawEstimate, block, maxPriorityFeePerGas, nonceResult] = await Promise.all([
+            client.estimateGas(estimateParams as any),
+            client.getBlock({ blockTag: "latest" }),
+            client.estimateMaxPriorityFeePerGas().catch(() => null as bigint | null),
+            makeNonceFetch(client),
+          ]);
+        } catch (err) {
+          // Only estimateGas / getBlock failures reach here — the nonce
+          // fetch is captured into its own sentinel and cannot throw.
+          throw new MantleMcpError(
+            "GAS_ESTIMATION_FAILED",
+            `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`,
+            "The transaction may revert on-chain. Check that the sender has sufficient balance " +
+              "and that the calldata/target are correct. Do NOT submit without a valid gas estimate.",
+            {
+              to: result.unsigned_tx.to,
+              sender: sender ?? null,
+              intent: result.intent ?? null,
+            }
+          );
+        }
+        // Capture immediately after the RPC round-trip so this reflects the
+        // mempool observation, not post-processing time.
+        const nonceFetchedAt = new Date().toISOString();
+
+        // Surface nonce-fetch failures with their own error code so
+        // operators can distinguish "RPC couldn't give me a nonce" from
+        // "simulation reverted".
+        if (!nonceResult.ok) {
+          throwNonceFetchFailed(nonceResult.error);
+        }
+
+        // 20% safety buffer on gas limit.
+        const bufferedGas = (rawEstimate * 120n) / 100n;
+        result.unsigned_tx.gas = "0x" + bufferedGas.toString(16);
+
+        applyFeeFromBlock(block, maxPriorityFeePerGas);
+
+        if (nonceArg === null && nonceResult.ok && nonceResult.value !== null) {
+          result.unsigned_tx.nonce = nonceResult.value;
+          result.nonce_fetched_at_utc = nonceFetchedAt;
+        }
+      } else {
+        // Plain ETH transfer (data = "0x") — gas is fixed at 21_000 by EVM
+        // intrinsic cost, but we still fetch baseFee / tip / pending nonce
+        // so the signer receives a fully deterministic tx.
+        const client = getPublicClient(net);
+
+        let block: Awaited<ReturnType<typeof client.getBlock>>;
+        let maxPriorityFeePerGas: bigint | null;
+        let nonceResult: NonceFetchResult;
+        try {
+          [block, maxPriorityFeePerGas, nonceResult] = await Promise.all([
+            client.getBlock({ blockTag: "latest" }),
+            client.estimateMaxPriorityFeePerGas().catch(() => null as bigint | null),
+            makeNonceFetch(client),
+          ]);
+        } catch (err) {
+          // Only getBlock failures reach here (estimateMaxPriorityFeePerGas
+          // swallows its own errors, nonce fetch is sentinel-wrapped).
+          throw new MantleMcpError(
+            "GAS_ESTIMATION_FAILED",
+            `Chain state fetch failed for ETH transfer: ${err instanceof Error ? err.message : String(err)}`,
+            "The RPC could not return block headers. Retry when the node is reachable, or " +
+              "provide explicit gas/fee parameters via the build tool args.",
+            {
+              to: result.unsigned_tx.to,
+              sender: sender ?? null,
+              intent: result.intent ?? null,
+            }
+          );
+        }
+        const nonceFetchedAt = new Date().toISOString();
+
+        if (!nonceResult.ok) {
+          throwNonceFetchFailed(nonceResult.error);
+        }
+
+        // Intrinsic gas for a plain value transfer is 21_000 on EVM.
+        result.unsigned_tx.gas = "0x" + (21_000n).toString(16);
+
+        applyFeeFromBlock(block, maxPriorityFeePerGas);
+
+        if (nonceArg === null && nonceResult.ok && nonceResult.value !== null) {
+          result.unsigned_tx.nonce = nonceResult.value;
+          result.nonce_fetched_at_utc = nonceFetchedAt;
         }
       }
 
-      const key = computeIdempotencyKey(result.unsigned_tx, idempotencySender, requestId);
+      // Non-skip result: all deterministic fields (gas, fees, nonce) are
+      // now pinned and the tx is signable as-is.
+      result.is_broadcastable = true;
+
+      // Finding 2: include the pinned nonce in the idempotency key. Once
+      // the builder pins nonce into unsigned_tx, two rebuilds that see
+      // different pending nonces (e.g. because an unrelated wallet tx
+      // advanced the counter in between) are MATERIALLY DIFFERENT
+      // transactions and must NOT collide on the dedupe layer —
+      // otherwise a legitimate retry after nonce advancement would be
+      // suppressed by the executor.
+      const pinnedNonce: number | null =
+        typeof result.unsigned_tx.nonce === "number" ? result.unsigned_tx.nonce : null;
+      const key = computeIdempotencyKey(result.unsigned_tx, idempotencySender, requestId, pinnedNonce);
       return {
         ...result,
         idempotency_key: key,
@@ -554,7 +774,27 @@ function wrapBuildHandler(
   };
 }
 
+/**
+ * Public result of a successful build-tool call.
+ *
+ * This is a discriminated union on `is_broadcastable`:
+ *
+ *   - `true`  → `UnsignedTxResult`: a fully-populated, signable tx with
+ *                gas/fee/nonce pinned from chain state. The executor
+ *                signs `unsigned_tx` verbatim.
+ *   - `false` → `SkipBuildResult`: the builder determined that no tx is
+ *                needed (e.g. ERC-20 allowance already sufficient, LB
+ *                operator already approved). `unsigned_tx` contains
+ *                only calldata context — `data` is `"0x"`, there is no
+ *                `gas`/`nonce`/fee, and the executor MUST NOT sign it.
+ *                Callers branch on `intent` (ends in `_skip`) or
+ *                `is_broadcastable === false` to suppress submission.
+ */
+type BuildToolResult = UnsignedTxResult | SkipBuildResult;
+
 interface UnsignedTxResult {
+  /** Discriminator. `true` means `unsigned_tx` is fully pinned and signable. */
+  is_broadcastable: true;
   intent: string;
   human_summary: string;
   unsigned_tx: {
@@ -562,28 +802,63 @@ interface UnsignedTxResult {
     data: string;
     value: string;
     chainId: number;
-    /** Suggested gas limit. Wallets should use this or estimate on their own. */
-    gas?: string;
-    /** EIP-1559 max fee per gas (baseFee × 2 + tip), hex-encoded wei.
-     *  Dynamically fetched from the latest block's baseFeePerGas. */
+    /**
+     * Pinned gas limit (hex). Always present in a successful build: DeFi
+     * calls use estimateGas + 20% buffer; plain ETH transfers use the
+     * intrinsic 21_000. External signers MUST use this value as-is — the
+     * determinism contract depends on it not being substituted with the
+     * signer's own estimate.
+     */
+    gas: string;
+    /**
+     * EIP-1559 max fee per gas, hex-encoded wei (baseFee × 2 + tip).
+     *
+     * Present on every EIP-1559 chain (including Mantle). Absent ONLY when
+     * the RPC reports `baseFeePerGas == null` on the latest block, i.e.
+     * the target chain does not support EIP-1559 at all. In that case a
+     * warning is attached to `warnings[]` and the signer must fall back
+     * to legacy `gasPrice`. This branch is effectively dead code on
+     * Mantle mainnet; it exists only to tolerate non-standard RPCs.
+     */
     maxFeePerGas?: string;
-    /** EIP-1559 max priority fee (tip), hex-encoded wei.
-     *  Dynamically fetched via eth_maxPriorityFeePerGas. */
+    /**
+     * EIP-1559 max priority fee (tip), hex-encoded wei. Set together with
+     * `maxFeePerGas`; absent together. See note above.
+     */
     maxPriorityFeePerGas?: string;
-    /** Optional nonce override. Only present when caller explicitly provides a nonce
-     *  (e.g. after querying mantle_getNonce to work around signer nonce issues). */
-    nonce?: number;
+    /**
+     * Nonce pinned from the pending mempool at build time
+     * (eth_getTransactionCount "pending"). Always present in a successful
+     * build. External signers (Privy, etc.) MUST use this value as-is —
+     * do NOT auto-assign a new nonce; duplicate broadcasts have been
+     * observed when signers override this.
+     *
+     * To replace a stuck transaction, pass an explicit `nonce` arg to the
+     * build tool; the override is both pinned here AND folded into the
+     * idempotency key so the executor treats the replacement as a
+     * distinct transaction.
+     */
+    nonce: number;
   };
   /**
    * Deterministic, signer-scoped hash for deduplication.
    *
-   * Computed as keccak256(sender + request_id + to + data + value + chainId).
-   * The sender address is normalized to checksummed lowercase before hashing,
-   * so "0xABC..." and "0xabc..." produce the same key.
+   * Computed as keccak256(sender + request_id + to + data + value + chainId
+   * + nonce). The sender address is normalized to checksummed lowercase
+   * before hashing, so "0xABC..." and "0xabc..." produce the same key.
    *
    * The external signer / executor SHOULD use this key for deduplication:
    * if two build-tool calls from the SAME sender return the same
    * idempotency_key, the second transaction MUST NOT be signed or broadcast.
+   *
+   * **Pinned nonce participates in the key.** Two rebuilds from the same
+   * request_id but observing different pending nonces (e.g. because an
+   * unrelated wallet tx advanced the counter) are materially distinct
+   * transactions and MUST be allowed through dedupe. Previously the
+   * auto-fetched nonce was excluded, but that caused the following hang:
+   * a legitimate rebuild after nonce advancement collided with the stale
+   * key of the prior (already-broadcast) attempt and got dropped, so the
+   * operation wedged until request_id was manually bumped.
    *
    * Sender for idempotency scoping is extracted in priority order:
    *   sender > owner > on_behalf_of > recipient
@@ -605,6 +880,29 @@ interface UnsignedTxResult {
   };
   warnings: string[];
   built_at_utc: string;
+  /**
+   * UTC timestamp of the `eth_getTransactionCount("pending")` fetch that
+   * produced `unsigned_tx.nonce`. Always present in a successful build when
+   * the nonce was fetched from chain (i.e. no explicit override was passed).
+   *
+   * Exposed separately from `built_at_utc` because the pending nonce is the
+   * freshness-critical field of the build: it's valid only against the
+   * mempool state observed at this instant. Executors SHOULD compare this
+   * timestamp against `Date.now()` at sign time and reject / re-build when
+   * the gap exceeds their staleness budget (e.g. > 30s).
+   *
+   * Note on ordering: `nonce_fetched_at_utc` is strictly later than
+   * `built_at_utc`. `built_at_utc` is stamped by the pre-wrap builder
+   * (before wrapBuildHandler runs its RPC round-trip), while
+   * `nonce_fetched_at_utc` is captured right after the `Promise.all` that
+   * estimated gas + pulled the pending nonce. The two differ by the RPC
+   * latency of the build — typically tens of ms to a few seconds.
+   *
+   * Absent ONLY when the caller supplied an explicit `nonce` override —
+   * in that case the tx is deterministic by construction, so staleness of
+   * a chain fetch does not apply.
+   */
+  nonce_fetched_at_utc?: string;
   /** Token metadata for proper decimal formatting. */
   token_info?: {
     token_in?: { symbol: string; decimals: number; address: string };
@@ -638,6 +936,74 @@ interface UnsignedTxResult {
   };
 }
 
+/**
+ * Non-broadcastable skip result.
+ *
+ * Returned when the builder determined no transaction is needed (e.g.
+ * ERC-20 allowance already ≥ requested amount, LB operator already
+ * flagged). `data` is always `"0x"` and the deterministic fields
+ * (gas / fee / nonce) are intentionally ABSENT so a signer cannot
+ * accidentally broadcast a useless 0-value transfer.
+ *
+ * The `intent` string always ends in `_skip` (e.g. `approve_skip`) —
+ * callers SHOULD branch on that suffix or on `is_broadcastable === false`.
+ */
+interface SkipBuildResult {
+  is_broadcastable: false;
+  intent: string;
+  human_summary: string;
+  unsigned_tx: {
+    to: string;
+    /** Always `"0x"` for skip results — no calldata, by convention. */
+    data: string;
+    /** Always `"0x0"` for skip results. */
+    value: string;
+    chainId: number;
+  };
+  idempotency_key?: string;
+  idempotency_scope?: {
+    sender: string;
+    request_id: string;
+  };
+  warnings: string[];
+  built_at_utc: string;
+}
+
+/**
+ * Pre-wrap builder output shape.
+ *
+ * Individual builders (buildSwap, buildAaveSupply, …) return this shape:
+ * the calldata is fully specified (to / data / value / chainId) but the
+ * deterministic fields (gas, fees, nonce) are NOT yet populated. They are
+ * filled in by `wrapBuildHandler` via RPC calls before the result is
+ * returned to the caller.
+ *
+ * Callers / external signers see `UnsignedTxResult | SkipBuildResult`
+ * (i.e. the public `BuildToolResult`), where gas/nonce are REQUIRED on
+ * the broadcastable branch. The `?` here reflects pipeline state, not
+ * runtime uncertainty: every successfully wrapped broadcastable build
+ * will have them set.
+ *
+ * `is_broadcastable` is also optional in the pre-wrap shape — builders
+ * may leave it undefined, and `wrapBuildHandler` stamps the final
+ * discriminator (`true` for broadcastable pipelines, `false` for skip
+ * short-circuits).
+ */
+interface BuilderUnsignedTxResult
+  extends Omit<UnsignedTxResult, "unsigned_tx" | "is_broadcastable"> {
+  is_broadcastable?: boolean;
+  unsigned_tx: {
+    to: string;
+    data: string;
+    value: string;
+    chainId: number;
+    gas?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
+    nonce?: number;
+  };
+}
+
 // =========================================================================
 // Tool 1: mantle_buildApprove
 // =========================================================================
@@ -645,7 +1011,7 @@ interface UnsignedTxResult {
 export async function buildApprove(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -744,9 +1110,14 @@ export async function buildApprove(
 export async function buildWrapMnt(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
+
+  // Required: the signer address. Used by wrapBuildHandler to fetch the
+  // pending nonce + estimate gas. Also surfaced to callers as a record
+  // of which wallet owns the resulting WMNT balance.
+  requireAddress(args.sender ?? args.owner, "sender");
 
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
@@ -777,9 +1148,13 @@ export async function buildWrapMnt(
 export async function buildUnwrapMnt(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
+
+  // Required: the signer address (the WMNT holder). Used by wrapBuildHandler
+  // to fetch the pending nonce + estimate gas deterministically.
+  requireAddress(args.sender ?? args.owner, "sender");
 
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
@@ -1032,7 +1407,7 @@ function buildMoeMultihopSwapFromQuoter(params: {
   deadline: bigint;
   network: Network;
   now: string;
-}): UnsignedTxResult {
+}): BuilderUnsignedTxResult {
   const {
     quoterRoute, tokenIn, tokenOut, amountInRaw, amountInDecimal,
     amountOutMin, recipient, deadline, network, now
@@ -1101,7 +1476,7 @@ function buildMoeMultihopSwapFromQuoter(params: {
 export async function buildSwap(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
   const provider = requireProvider(args.provider);
@@ -1423,7 +1798,7 @@ function buildV3Swap(params: {
   network: Network;
   feeTier: number;
   now: string;
-}): UnsignedTxResult {
+}): BuilderUnsignedTxResult {
   const {
     provider,
     tokenIn,
@@ -1504,7 +1879,7 @@ function buildMoeSwap(params: {
   binStep: number;
   routerVersion: number;
   now: string;
-}): UnsignedTxResult {
+}): BuilderUnsignedTxResult {
   const {
     tokenIn,
     tokenOut,
@@ -1590,7 +1965,7 @@ function buildV3MultihopSwap(params: {
   deadline: bigint;
   network: Network;
   now: string;
-}): UnsignedTxResult {
+}): BuilderUnsignedTxResult {
   const {
     provider, route, tokenIn, tokenOut, amountInRaw, amountInDecimal,
     amountOutMin, recipient, deadline, network, now
@@ -1656,7 +2031,7 @@ function buildV3MultihopSwap(params: {
 export async function buildAddLiquidity(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
   const provider = requireProvider(args.provider);
@@ -2123,7 +2498,7 @@ async function buildV3AddLiquidity(params: {
   tickLower: number;
   tickUpper: number;
   now: string;
-}): Promise<UnsignedTxResult> {
+}): Promise<BuilderUnsignedTxResult> {
   const {
     provider,
     tokenA,
@@ -2344,7 +2719,7 @@ async function buildMoeAddLiquidity(params: {
   distributionY: number[] | null;
   now: string;
   deps: DefiWriteDeps;
-}): Promise<UnsignedTxResult> {
+}): Promise<BuilderUnsignedTxResult> {
   const {
     tokenA,
     tokenB,
@@ -2591,12 +2966,16 @@ async function buildMoeAddLiquidity(params: {
 export async function buildRemoveLiquidity(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
   const provider = requireProvider(args.provider);
 
   const recipient = requireAddress(args.recipient, "recipient");
+  // Required: the LP token holder / signer address. V3 path: NFT owner
+  // on NonfungiblePositionManager. LB path: holder of the LB shares.
+  // wrapBuildHandler uses this to fetch the pending nonce + estimate gas.
+  const owner = requireAddress(args.owner ?? args.sender, "owner");
   const deadline = d.deadline();
 
   if (provider === "agni" || provider === "fluxion") {
@@ -2806,12 +3185,12 @@ export async function buildRemoveLiquidity(
       }
     }
 
-    // Read user LP balances for all candidate bins via multicall
-    // Use owner (the LP token holder / signer) if provided; fall back to recipient.
-    // The LP tokens are held by the signer, not the recipient — these may differ.
-    const lpHolder = args.owner
-      ? requireAddress(args.owner, "owner")
-      : recipient;
+    // Read user LP balances for all candidate bins via multicall.
+    // `owner` (the LP share holder / signer) is required at the top of
+    // this function — LP shares live on the signer's address, not on
+    // `recipient` where removed tokens are sent. wrapBuildHandler also
+    // uses `owner` to fetch the pending nonce.
+    const lpHolder = owner;
     const balanceCalls = binIdsToCheck.map((id) => ({
       address: pairAddr,
       abi: LB_PAIR_ABI,
@@ -3036,7 +3415,7 @@ function buildV3RemoveLiquidity(params: {
   deadline: bigint;
   network: Network;
   now: string;
-}): UnsignedTxResult {
+}): BuilderUnsignedTxResult {
   const {
     provider,
     tokenId,
@@ -3120,7 +3499,7 @@ function buildV3RemoveLiquidity(params: {
 export async function buildSetLBApprovalForAll(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3273,7 +3652,7 @@ export async function buildSetLBApprovalForAll(
 export async function buildAaveSupply(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3355,7 +3734,7 @@ export async function buildAaveSupply(
 export async function buildAaveBorrow(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3519,7 +3898,7 @@ export async function buildAaveBorrow(
 export async function buildAaveRepay(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3589,7 +3968,7 @@ export async function buildAaveRepay(
 export async function buildAaveWithdraw(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3597,6 +3976,11 @@ export async function buildAaveWithdraw(
   const reserve = requireAaveReserve(assetInput);
   const asset = await resolveToken(d, reserve.underlying, network);
   const to = requireAddress(args.to ?? args.recipient, "to");
+  // Required: the aToken holder / signer address. Aave's Pool.withdraw
+  // uses msg.sender as the position owner; `to` is only the destination
+  // for the withdrawn underlying. wrapBuildHandler pins nonce + gas against
+  // `owner` for deterministic unsigned_tx construction.
+  requireAddress(args.owner ?? args.sender ?? args.on_behalf_of, "owner");
 
   const amountRaw =
     args.amount === "max"
@@ -3682,7 +4066,7 @@ function isCollateralEnabled(userConfigBitmap: bigint, reserveId: number): boole
 export async function buildAaveSetCollateral(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3703,16 +4087,16 @@ export async function buildAaveSetCollateral(
 
   // ── msg.sender semantics ──────────────────────────────────────────
   // setUserUseReserveAsCollateral operates on msg.sender, NOT an
-  // arbitrary address.  The `user` param is only used for preflight
-  // diagnostics below — it is NOT encoded into the transaction.
-  const userRaw = args.user ?? args.on_behalf_of;
-  const user = typeof userRaw === "string" && isAddress(userRaw, { strict: false })
-    ? getAddress(userRaw) as `0x${string}`
-    : null;
+  // arbitrary address. `owner` is required and is interpreted AS the
+  // signer: used by wrapBuildHandler for nonce + gas, and by preflight
+  // diagnostics below (aToken balance, collateral flag). The tx still
+  // encodes only (asset, useAsCollateral) — msg.sender is implicit.
+  const owner = requireAddress(args.owner ?? args.sender ?? args.user ?? args.on_behalf_of, "owner");
+  const user = getAddress(owner) as `0x${string}`;
 
   warnings.push(
     "MSG.SENDER: This transaction operates on the signing wallet (msg.sender), " +
-    "not an arbitrary address. The signer must be the user who supplied the asset."
+    "not an arbitrary address. The signer must match owner=" + owner + "."
   );
 
   // ── Preflight diagnostics (best-effort, non-blocking) ────────────
@@ -3943,7 +4327,7 @@ export async function getSwapPairs(
 export async function buildCollectFees(
   args: Record<string, unknown>,
   deps?: Partial<DefiWriteDeps>
-): Promise<UnsignedTxResult> {
+): Promise<BuilderUnsignedTxResult> {
   const d = withDeps(deps);
   const { network } = normalizeNetwork(args);
 
@@ -3983,6 +4367,10 @@ export async function buildCollectFees(
 
   // Validate recipient
   const recipient = requireAddress(args.recipient, "recipient");
+  // Required: NFT owner / signer address. The V3 NonfungiblePositionManager
+  // authorizes collect() via ownerOf(tokenId) == msg.sender. wrapBuildHandler
+  // uses `owner` to fetch the pending nonce + estimate gas deterministically.
+  requireAddress(args.owner ?? args.sender, "owner");
 
   const positionManager = getContractAddress(
     provider,
@@ -4126,7 +4514,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["token", "spender", "amount"]
+      required: ["token", "spender", "amount", "owner"]
     },
     handler: wrapBuildHandler(buildApprove)
   },
@@ -4159,7 +4547,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["amount"]
+      required: ["amount", "sender"]
     },
     handler: wrapBuildHandler(buildWrapMnt)
   },
@@ -4192,7 +4580,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["amount"]
+      required: ["amount", "sender"]
     },
     handler: wrapBuildHandler(buildUnwrapMnt)
   },
@@ -4271,7 +4659,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["provider", "token_in", "token_out", "amount_in", "recipient"]
+      required: ["provider", "token_in", "token_out", "amount_in", "recipient", "owner"]
     },
     handler: wrapBuildHandler(buildSwap)
   },
@@ -4398,7 +4786,8 @@ export const defiWriteTools: Record<string, Tool> = {
         "provider",
         "token_a",
         "token_b",
-        "recipient"
+        "recipient",
+        "owner"
       ]
     },
     handler: wrapBuildHandler(buildAddLiquidity)
@@ -4468,7 +4857,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["provider", "recipient"]
+      required: ["provider", "recipient", "owner"]
     },
     handler: wrapBuildHandler(buildRemoveLiquidity)
   },
@@ -4513,7 +4902,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Network: 'mainnet' (default) or 'sepolia'."
         }
       },
-      required: ["operator"]
+      required: ["operator", "owner"]
     },
     handler: wrapBuildHandler(buildSetLBApprovalForAll)
   },
@@ -4641,7 +5030,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildAaveWithdraw: {
     name: "mantle_buildAaveWithdraw",
     description:
-      "Build an unsigned Aave V3 withdraw transaction. Use amount='max' to withdraw entire balance. May lower health factor.\n\nExamples:\n- Withdraw 50 USDC: asset='USDC', amount='50', to='0x...'\n- Withdraw all WMNT: asset='WMNT', amount='max', to='0x...'",
+      "Build an unsigned Aave V3 withdraw transaction. Use amount='max' to withdraw entire balance. May lower health factor.\n\nExamples:\n- Withdraw 50 USDC: asset='USDC', amount='50', to='0x...', owner='0x...'\n- Withdraw all WMNT: asset='WMNT', amount='max', to='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -4657,6 +5046,13 @@ export const defiWriteTools: Record<string, Tool> = {
           type: "string",
           description: "Address to receive the withdrawn tokens."
         },
+        owner: {
+          type: "string",
+          description:
+            "Signing wallet address (the supplier whose aTokens are being burned). " +
+            "REQUIRED: used to pin gas/fee/nonce deterministically. May differ " +
+            "from `to` when routing withdrawn funds to another address."
+        },
         network: {
           type: "string",
           description: "Network: 'mainnet' (default) or 'sepolia'."
@@ -4666,7 +5062,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["asset", "amount", "to"]
+      required: ["asset", "amount", "to", "owner"]
     },
     handler: wrapBuildHandler(buildAaveWithdraw)
   },
@@ -4689,8 +5085,8 @@ export const defiWriteTools: Record<string, Tool> = {
       "3. Oracle price=0 → collateral enabled but USD value is 0\n" +
       "4. Reserve not active → tool will error with RESERVE_NOT_ACTIVE\n\n" +
       "Examples:\n" +
-      "- Enable WMNT as collateral: asset='WMNT', user='0x...' (user for diagnostics)\n" +
-      "- Disable USDC as collateral: asset='USDC', user='0x...', use_as_collateral=false",
+      "- Enable WMNT as collateral: asset='WMNT', owner='0x...'\n" +
+      "- Disable USDC as collateral: asset='USDC', owner='0x...', use_as_collateral=false",
     inputSchema: {
       type: "object",
       properties: {
@@ -4698,11 +5094,21 @@ export const defiWriteTools: Record<string, Tool> = {
           type: "string",
           description: "Token symbol or address to enable/disable as collateral."
         },
+        owner: {
+          type: "string",
+          description:
+            "Signing wallet address. REQUIRED: used to pin gas/fee/nonce " +
+            "and to drive preflight diagnostics (aToken balance, collateral " +
+            "status, reserve config). The tx always operates on msg.sender " +
+            "on-chain; this field is NOT encoded into calldata, but it must " +
+            "match the signing wallet or the collateral toggle will apply to " +
+            "the wrong account."
+        },
         user: {
           type: "string",
           description:
-            "Wallet address for preflight diagnostics (aToken balance, collateral status, " +
-            "reserve config). NOT encoded into the tx — the tx always operates on msg.sender."
+            "DEPRECATED alias for `owner`. Prefer `owner` — kept only for " +
+            "backward compatibility; will be removed in a future release."
         },
         use_as_collateral: {
           type: "boolean",
@@ -4717,7 +5123,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["asset"]
+      required: ["asset", "owner"]
     },
     handler: wrapBuildHandler(buildAaveSetCollateral)
   },
@@ -4743,7 +5149,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildCollectFees: {
     name: "mantle_buildCollectFees",
     description:
-      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id — call mantle_getV3Positions to enumerate, look it up on a block explorer (Mantlescan) / https://agni.finance, or read it from the unsigned_tx response of a prior mantle_buildAddLiquidity call.\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'\n\nNOTE: Merchant Moe LB fees are embedded in bin reserves and collected automatically when removing liquidity via mantle_buildRemoveLiquidity. This tool only supports V3 positions (Agni/Fluxion).",
+      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id — call mantle_getV3Positions to enumerate, look it up on a block explorer (Mantlescan) / https://agni.finance, or read it from the unsigned_tx response of a prior mantle_buildAddLiquidity call.\n2. Call mantle_buildCollectFees with the token_id, recipient, and owner\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...', owner='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...', owner='0x...'\n\nNOTE: Merchant Moe LB fees are embedded in bin reserves and collected automatically when removing liquidity via mantle_buildRemoveLiquidity. This tool only supports V3 positions (Agni/Fluxion).",
     inputSchema: {
       type: "object",
       properties: {
@@ -4759,6 +5165,14 @@ export const defiWriteTools: Record<string, Tool> = {
           type: "string",
           description: "Address to receive the collected fees."
         },
+        owner: {
+          type: "string",
+          description:
+            "Signing wallet address — the NFT position owner. REQUIRED: " +
+            "used to pin gas/fee/nonce deterministically. On-chain the " +
+            "collect() call is authorized via ownerOf(tokenId) == msg.sender, " +
+            "so this field MUST equal the signing wallet."
+        },
         network: {
           type: "string",
           description: "Network: 'mainnet' (default) or 'sepolia'."
@@ -4768,7 +5182,7 @@ export const defiWriteTools: Record<string, Tool> = {
           description: "Optional nonce override. Query mantle_getNonce first to get the correct value. Only use when the signer has nonce issues."
         }
       },
-      required: ["provider", "token_id", "recipient"]
+      required: ["provider", "token_id", "recipient", "owner"]
     },
     handler: wrapBuildHandler(buildCollectFees)
   }

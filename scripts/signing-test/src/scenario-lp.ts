@@ -183,6 +183,7 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       "lp", "remove",
       "--provider", "merchant_moe",
       "--recipient", w.address,
+      "--owner", w.address,
       "--token-a", symX,
       "--token-b", symY,
       "--bin-step", String(pos.bin_step),
@@ -213,6 +214,7 @@ test("LP: cleanup any pre-existing positions (reset to clean state)", async () =
       "lp", "remove",
       "--provider", "agni",
       "--recipient", w.address,
+      "--owner", w.address,
       "--token-id", pos.token_id,
       "--percentage", "100",
     ]);
@@ -275,7 +277,7 @@ test("Ensure WMNT balance for LP + stable swaps (wrap MNT if needed)", async () 
 
   const needed = target - wmntBalance;
   const wrapAmount = formatEther(needed);
-  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount]);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount, "--sender", w.address]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "wrap tx status");
@@ -320,6 +322,7 @@ test(`Acquire USDT: swap ${SWAP_WMNT_FOR_USDT} WMNT → USDT on Moe (skip if bal
     "--in", "WMNT", "--out", "USDT",
     "--amount", SWAP_WMNT_FOR_USDT,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
@@ -374,6 +377,7 @@ test(`Acquire USDe: swap ${SWAP_WMNT_FOR_USDe} WMNT → USDe on Moe (skip if bal
     "--in", "WMNT", "--out", "USDe",
     "--amount", SWAP_WMNT_FOR_USDe,
     "--recipient", w.address,
+    "--owner", w.address,
     "--amount-out-min", minOut,
   ]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
@@ -420,6 +424,7 @@ test("Moe: add liquidity WMNT/USDT (active bin)", async () => {
     "--amount-a", MOE_LP_WMNT,
     "--amount-b", MOE_LP_USDT,
     "--recipient", w.address,
+    "--owner", w.address,
     "--bin-step", String(pool.binStep),
   ]);
 
@@ -430,6 +435,8 @@ test("Moe: add liquidity WMNT/USDT (active bin)", async () => {
     MOE_LB_ROUTER.toLowerCase(),
     "to should be Moe LB Router",
   );
+  // nonce must be pinned at build time so Privy receives a fully deterministic transaction.
+  assertEqual(typeof tx.unsigned_tx.nonce, "number", "unsigned_tx.nonce should be a number");
 
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
@@ -473,6 +480,7 @@ test("Moe: remove liquidity WMNT/USDT", async () => {
     "lp", "remove",
     "--provider", "merchant_moe",
     "--recipient", w.address,
+    "--owner", w.address,
     "--token-a", "WMNT",
     "--token-b", "USDT",
     "--bin-step", String(pool.binStep),
@@ -516,6 +524,7 @@ test("Agni: add liquidity WMNT/USDe (full range)", async () => {
     "--amount-a", AGNI_LP_WMNT,
     "--amount-b", AGNI_LP_USDe,
     "--recipient", w.address,
+    "--owner", w.address,
     "--fee-tier",   String(pool.feeTier),
     "--tick-lower", String(-pool.fullRangeTick),
     "--tick-upper", String(pool.fullRangeTick),
@@ -527,6 +536,8 @@ test("Agni: add liquidity WMNT/USDe (full range)", async () => {
     AGNI_POSITION_MANAGER.toLowerCase(),
     "to should be Agni PositionManager",
   );
+  // nonce must be pinned at build time so Privy receives a fully deterministic transaction.
+  assertEqual(typeof tx.unsigned_tx.nonce, "number", "unsigned_tx.nonce should be a number");
 
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
@@ -577,6 +588,7 @@ test("Agni: remove liquidity (100%)", async () => {
     "lp", "remove",
     "--provider", "agni",
     "--recipient", w.address,
+    "--owner", w.address,
     "--token-id", agniPos!.token_id,
     "--percentage", "100",
   ]);

@@ -135,6 +135,7 @@ test("Aave: cleanup any pre-existing positions (reset to clean state)", async ()
       "--asset", asset,
       "--amount", "max",
       "--to", w.address,
+      "--owner", w.address,
     ]);
     const result = await signAndSend(w, tx.unsigned_tx, { dryRun: false });
     if (result) {
@@ -215,7 +216,7 @@ test("Ensure WMNT balance for supply + USDT0 swap (wrap MNT if needed)", async (
 
   const needed = target - wmntBalance;
   const wrapAmount = formatEther(needed);
-  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount]);
+  const tx = await buildTx(["swap", "wrap-mnt", "--amount", wrapAmount, "--sender", w.address]);
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
     assertEqual(result.receipt.status, "success", "wrap tx status");
@@ -336,6 +337,9 @@ test(`Aave: supply ${SUPPLY_WMNT} WMNT`, async () => {
     AAVE_POOL.toLowerCase(),
     "to should be Aave Pool",
   );
+  // nonce must be pinned at build time (wrapBuildHandler auto-fetches it from
+  // the pending mempool) so Privy receives a fully deterministic transaction.
+  assertEqual(typeof tx.unsigned_tx.nonce, "number", "unsigned_tx.nonce should be a number");
 
   const result = await signAndSend(w, tx.unsigned_tx, { dryRun: DRY_RUN });
   if (result) {
@@ -385,14 +389,14 @@ test(`Aave: supply ${SUPPLY_USDT0} USDT0`, async () => {
 
 test("Aave: enable WMNT as collateral", async () => {
   const w = wallet();
-  // Natural agent call: always pass --user so the CLI can preflight.
-  // In dry-run the prior supply wasn't broadcast — if the preflight flags that
-  // as an error, it's real CLI/core behaviour we want to surface rather than
-  // hide by dropping --user.
+  // Natural agent call: always pass --owner so the CLI can preflight AND
+  // pin nonce/gas against the signer. In dry-run the prior supply wasn't
+  // broadcast — if the preflight flags that as an error, it's real CLI/core
+  // behaviour we want to surface rather than hide.
   const tx = await buildTx([
     "aave", "set-collateral",
     "--asset", "WMNT",
-    "--user", w.address,
+    "--owner", w.address,
   ]);
   // Intent may be aave_set_collateral or a skip variant — check to address anyway.
   assertEqual(
@@ -459,6 +463,7 @@ test("Aave: withdraw supplied USDT0 (max)", async () => {
     "--asset", "USDT0",
     "--amount", "max",
     "--to", w.address,
+    "--owner", w.address,
   ]);
   assertEqual(tx.intent, "aave_withdraw", "intent");
   assertEqual(
@@ -528,6 +533,7 @@ test("Aave: withdraw supplied WMNT (max)", async () => {
     "--asset", "WMNT",
     "--amount", "max",
     "--to", w.address,
+    "--owner", w.address,
   ]);
   assertEqual(tx.intent, "aave_withdraw", "intent");
   assertEqual(
