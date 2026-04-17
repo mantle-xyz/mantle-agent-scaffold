@@ -270,6 +270,64 @@ async function resolveToken(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Balance preflight helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check that `owner` holds at least `required` units of an ERC-20 token.
+ * Throws INSUFFICIENT_BALANCE if not. Skips the check when required === MAX_UINT256
+ * (e.g. amount='max' for repay/withdraw — the chain bounds it to actual debt/balance).
+ * Callers should wrap this in a try/catch that re-throws only INSUFFICIENT_BALANCE
+ * and swallows unrelated RPC failures (same pattern as the allowance checks).
+ */
+async function checkErc20Balance(
+  client: ReturnType<typeof getPublicClient>,
+  token: { address: string; symbol: string; decimals: number },
+  required: bigint,
+  owner: string
+): Promise<void> {
+  if (required === MAX_UINT256) return;
+  const balance = (await client.readContract({
+    address: token.address as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [owner as `0x${string}`]
+  })) as bigint;
+  if (balance < required) {
+    const current = formatUnits(balance, token.decimals);
+    const needed  = formatUnits(required, token.decimals);
+    throw new MantleMcpError(
+      "INSUFFICIENT_BALANCE",
+      `${token.symbol} balance for ${owner} is ${current}, but this operation requires ${needed}.`,
+      `Fund the wallet with at least ${needed} ${token.symbol}, or reduce the amount.`,
+      { token: token.symbol, required: needed, current_balance: current, owner }
+    );
+  }
+}
+
+/**
+ * Check that `owner` holds at least `required` native MNT.
+ * Throws INSUFFICIENT_BALANCE if not.
+ */
+async function checkNativeBalance(
+  client: ReturnType<typeof getPublicClient>,
+  required: bigint,
+  owner: string
+): Promise<void> {
+  const balance = await client.getBalance({ address: owner as `0x${string}` });
+  if (balance < required) {
+    const current = formatUnits(balance, 18);
+    const needed  = formatUnits(required, 18);
+    throw new MantleMcpError(
+      "INSUFFICIENT_BALANCE",
+      `MNT balance for ${owner} is ${current}, but this operation requires ${needed} MNT.`,
+      `Fund the wallet with at least ${needed} MNT, or reduce the amount.`,
+      { token: "MNT", required: needed, current_balance: current, owner }
+    );
+  }
+}
+
 function requirePositiveAmount(
   input: unknown,
   fieldName: string,
@@ -651,6 +709,21 @@ export async function buildWrapMnt(
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
 
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  const wrapSender = typeof args.sender === "string" && isAddress(args.sender, { strict: false })
+    ? getAddress(args.sender)
+    : null;
+  const wrapWarnings: string[] = [];
+  if (wrapSender) {
+    try {
+      const client = d.getClient(network);
+      await checkNativeBalance(client, amountRaw, wrapSender);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      wrapWarnings.push("Could not verify MNT balance (RPC error). Proceeding without balance check.");
+    }
+  }
+
   const data = encodeFunctionData({
     abi: WMNT_ABI,
     functionName: "deposit"
@@ -665,7 +738,7 @@ export async function buildWrapMnt(
       value: "0x" + amountRaw.toString(16),
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings: wrapWarnings,
     built_at_utc: d.now()
   };
 }
@@ -684,6 +757,22 @@ export async function buildUnwrapMnt(
   const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
   const amountDecimal = formatUnits(amountRaw, 18);
 
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  const unwrapSender = typeof args.sender === "string" && isAddress(args.sender, { strict: false })
+    ? getAddress(args.sender)
+    : null;
+  const unwrapWarnings: string[] = [];
+  if (unwrapSender) {
+    try {
+      const client = d.getClient(network);
+      const wmnt = wmntAddress(network);
+      await checkErc20Balance(client, { address: wmnt, symbol: "WMNT", decimals: 18 }, amountRaw, unwrapSender);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+      unwrapWarnings.push("Could not verify WMNT balance (RPC error). Proceeding without balance check.");
+    }
+  }
+
   const data = encodeFunctionData({
     abi: WMNT_ABI,
     functionName: "withdraw",
@@ -699,7 +788,7 @@ export async function buildUnwrapMnt(
       value: "0x0",
       chainId: chainId(network)
     },
-    warnings: [],
+    warnings: unwrapWarnings,
     built_at_utc: d.now()
   };
 }
@@ -1100,6 +1189,13 @@ export async function buildSwap(
       // Re-throw our own INSUFFICIENT_ALLOWANCE error only; swallow unrelated RPC failures.
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
       // Non-critical RPC failure — proceed without allowance check
+    }
+    // ── Balance pre-check (blocking) ─────────────────────────────────
+    try {
+      const client = d.getClient(network);
+      await checkErc20Balance(client, tokenIn, amountInRaw, swapOwner);
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
     }
   }
 
@@ -1916,6 +2012,23 @@ export async function buildAddLiquidity(
     } catch (err) {
       // Re-throw our own INSUFFICIENT_ALLOWANCE only; swallow unrelated RPC failures.
       if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
+    }
+    // ── Balance pre-check (blocking) ─────────────────────────────────
+    try {
+      const client = d.getClient(network);
+      const balSettled = await Promise.allSettled([
+        checkErc20Balance(client, tokenA, amountARaw, lpOwner),
+        checkErc20Balance(client, tokenB, amountBRaw, lpOwner)
+      ]);
+      for (const result of balSettled) {
+        if (result.status === "rejected") {
+          const err = result.reason;
+          if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+          // RPC failure — swallow
+        }
+      }
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
     }
   }
 
@@ -3197,6 +3310,14 @@ export async function buildAaveSupply(
   const poolAddress = getContractAddress("aave_v3", "pool", network);
   const amountDecimal = formatUnits(amountRaw, asset.decimals);
 
+  // ── Balance pre-check (blocking) ─────────────────────────────────────────
+  try {
+    const client = d.getClient(network);
+    await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
+  } catch (err) {
+    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+  }
+
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
     functionName: "supply",
@@ -3451,6 +3572,14 @@ export async function buildAaveRepay(
 
   const poolAddress = getContractAddress("aave_v3", "pool", network);
 
+  // ── Balance pre-check (blocking) — skipped when amount='max' (MAX_UINT256) ─
+  try {
+    const client = d.getClient(network);
+    await checkErc20Balance(client, asset, amountRaw, onBehalfOf);
+  } catch (err) {
+    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+  }
+
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
     functionName: "repay",
@@ -3512,6 +3641,21 @@ export async function buildAaveWithdraw(
       : formatUnits(amountRaw, asset.decimals);
 
   const poolAddress = getContractAddress("aave_v3", "pool", network);
+
+  // ── aToken balance pre-check (blocking) — skipped when amount='max' ──────
+  // The wallet must hold enough aTokens to redeem. aToken decimals match the
+  // underlying reserve (e.g. aUSDC has 6 decimals like USDC).
+  try {
+    const client = d.getClient(network);
+    await checkErc20Balance(
+      client,
+      { address: reserve.aToken, symbol: `a${reserve.symbol}`, decimals: reserve.decimals },
+      amountRaw,
+      to
+    );
+  } catch (err) {
+    if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") throw err;
+  }
 
   const data = encodeFunctionData({
     abi: AAVE_V3_POOL_ABI,
@@ -4038,7 +4182,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildWrapMnt: {
     name: "mantle_buildWrapMnt",
     description:
-      "Build an unsigned transaction to wrap MNT into WMNT. Returns calldata with value field set to the wrap amount.\n\nExamples:\n- Wrap 10 MNT: amount='10', sender='0x<signing_wallet>'\n- Wrap 0.5 MNT: amount='0.5'",
+      "Build an unsigned transaction to wrap MNT into WMNT. Returns calldata with value field set to the wrap amount.\n\nIf sender is provided, performs a blocking MNT balance check — throws INSUFFICIENT_BALANCE if the wallet cannot cover the amount.\n\nExamples:\n- Wrap 10 MNT: amount='10', sender='0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'\n- Wrap 0.5 MNT: amount='0.5'",
     inputSchema: {
       type: "object",
       properties: {
@@ -4071,7 +4215,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildUnwrapMnt: {
     name: "mantle_buildUnwrapMnt",
     description:
-      "Build an unsigned transaction to unwrap WMNT back to MNT.\n\nExamples:\n- Unwrap 10 WMNT: amount='10', sender='0x<signing_wallet>'\n- Unwrap 0.5 WMNT: amount='0.5'",
+      "Build an unsigned transaction to unwrap WMNT back to MNT.\n\nIf sender is provided, performs a blocking WMNT balance check — throws INSUFFICIENT_BALANCE if the wallet cannot cover the amount.\n\nExamples:\n- Unwrap 10 WMNT: amount='10', sender='0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'\n- Unwrap 0.5 WMNT: amount='0.5'",
     inputSchema: {
       type: "object",
       properties: {

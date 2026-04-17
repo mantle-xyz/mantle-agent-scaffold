@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSwap,
-  buildAddLiquidity
+  buildAddLiquidity,
+  buildWrapMnt,
+  buildUnwrapMnt,
+  buildAaveSupply,
+  buildAaveRepay,
+  buildAaveWithdraw
 } from "@mantleio/mantle-core/tools/defi-write.js";
 import { MantleMcpError } from "@mantleio/mantle-core/errors.js";
 
@@ -353,5 +358,284 @@ describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
       expect(err).toBeInstanceOf(MantleMcpError);
       expect((err as MantleMcpError).code).toBe("POOL_NOT_FOUND");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// INSUFFICIENT_BALANCE tests
+// ---------------------------------------------------------------------------
+
+describe("buildSwap INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when owner balance < amount_in (allowance is sufficient)", async () => {
+    try {
+      await buildSwap(
+        {
+          provider: "agni",
+          token_in: "USDC",
+          token_out: "USDT",
+          amount_in: "100",
+          amount_out_min: "99000000",
+          recipient: RECIPIENT,
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async ({ functionName }: { functionName: string }) => {
+              if (functionName === "allowance") return 1_000_000_000_000n; // sufficient
+              if (functionName === "balanceOf") return 0n;                 // zero balance → throw
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildSwap to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("USDC");
+      expect(meta.owner).toBe(OWNER);
+      expect(meta.required).toBe("100");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
+
+describe("buildWrapMnt INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when sender native MNT balance < amount", async () => {
+    try {
+      await buildWrapMnt(
+        { amount: "10", sender: OWNER, network: "mainnet" },
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ getBalance: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildWrapMnt to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("MNT");
+      expect(meta.owner).toBe(OWNER);
+      expect(meta.required).toBe("10");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
+
+describe("buildUnwrapMnt INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when sender WMNT balance < amount", async () => {
+    try {
+      await buildUnwrapMnt(
+        { amount: "5", sender: OWNER, network: "mainnet" },
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildUnwrapMnt to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("WMNT");
+      expect(meta.owner).toBe(OWNER);
+      expect(meta.required).toBe("5");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
+
+describe("buildAddLiquidity INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE for tokenA when allowance is sufficient but balance is zero", async () => {
+    try {
+      await buildAddLiquidity(
+        {
+          provider: "merchant_moe",
+          token_a: "USDC",
+          token_b: "WMNT",
+          amount_a: "1000",
+          amount_b: "1",
+          recipient: RECIPIENT,
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+              if (functionName === "getLBPairInformation") {
+                return { binStep: 25, LBPair: FAKE_LB_PAIR, createdByOwner: false, ignoredForRouting: false };
+              }
+              if (functionName === "getActiveId") return 8388608;
+              if (functionName === "getTokenX") return USDC_MAINNET.address;
+              if (functionName === "allowance") return 10n ** 36n;           // always sufficient
+              // balanceOf: USDC = 0 (insufficient), WMNT = plenty
+              if (functionName === "balanceOf" && address.toLowerCase() === USDC_MAINNET.address.toLowerCase()) return 0n;
+              return 1_000_000_000000000000000000n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAddLiquidity to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("USDC");
+      expect(meta.required).toBe("1000");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
+
+// Aave reserve lookups are from the static config (no mock needed for those).
+// USDC reserve: underlying=0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9,
+//               aToken=0xcb8164415274515867ec43CbD284ab5d6d2b304F, decimals=6
+
+describe("buildAaveSupply INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when on_behalf_of balance < amount", async () => {
+    try {
+      await buildAaveSupply(
+        { asset: "USDC", amount: "100", on_behalf_of: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAaveSupply to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("USDC");
+      expect(meta.required).toBe("100");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+});
+
+describe("buildAaveRepay INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when on_behalf_of balance < amount (non-max)", async () => {
+    try {
+      await buildAaveRepay(
+        { asset: "USDC", amount: "50", on_behalf_of: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAaveRepay to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("USDC");
+      expect(meta.required).toBe("50");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+
+  it("skips balance check when amount='max' (repays full debt regardless of balance)", async () => {
+    let sawBalanceError = false;
+    try {
+      await buildAaveRepay(
+        { asset: "USDC", amount: "max", on_behalf_of: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          // readContract always returns 0n — but balance check must be skipped for max
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawBalanceError = true;
+      }
+    }
+    expect(sawBalanceError).toBe(false);
+  });
+});
+
+describe("buildAaveWithdraw INSUFFICIENT_BALANCE throw path", () => {
+  it("throws INSUFFICIENT_BALANCE when aToken balance < amount", async () => {
+    // aToken for USDC on Mantle: 0xcb8164415274515867ec43CbD284ab5d6d2b304F
+    const AUSDC = "0xcb8164415274515867ec43CbD284ab5d6d2b304F";
+    try {
+      await buildAaveWithdraw(
+        { asset: "USDC", amount: "100", to: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          getClient: () => ({
+            readContract: async ({ address }: { address: string }) => {
+              // aToken balanceOf = 0 → INSUFFICIENT_BALANCE
+              if (address.toLowerCase() === AUSDC.toLowerCase()) return 0n;
+              return 1_000_000_000n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildAaveWithdraw to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("aUSDC");
+      expect(meta.required).toBe("100");
+      expect(meta.current_balance).toBe("0");
+    }
+  });
+
+  it("skips balance check when amount='max' (withdraws full aToken balance)", async () => {
+    let sawBalanceError = false;
+    try {
+      await buildAaveWithdraw(
+        { asset: "USDC", amount: "max", to: OWNER, network: "mainnet" },
+        {
+          resolveTokenInput: async () => USDC_MAINNET,
+          // readContract always returns 0n — but balance check must be skipped for max
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          getClient: () => ({ readContract: async () => 0n }) as any,
+          now: () => "2026-04-16T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawBalanceError = true;
+      }
+    }
+    expect(sawBalanceError).toBe(false);
   });
 });
