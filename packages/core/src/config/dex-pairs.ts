@@ -1,18 +1,23 @@
 /**
  * Known DEX trading pairs on Mantle with their pool parameters.
  *
- * Agents should use this registry to auto-resolve pool parameters
+ * Authoritative token/protocol whitelist:
+ *   skills/mantle-openclaw-competition/references/asset-whitelist.md
+ *
+ * Every entry here MUST reference only whitelisted tokens. Pairs that
+ * involve a token outside the whitelist (mETH, sUSDe, wHOODx, wCRCLx,
+ * AUSD, COOK, PUFF, JOE, axlUSDC, etc.) have been removed and must not
+ * be re-added without also updating the whitelist file.
+ *
+ * Agents use this registry to auto-resolve pool parameters
  * (bin_step for Merchant Moe, fee_tier for V3 DEXes) instead of
- * guessing or asking the user.
+ * guessing or asking the user. Pool parameters verified on-chain.
  *
  * Sources:
  * - DexScreener: https://dexscreener.com/mantle (pools with liq > $1000)
  * - GeckoTerminal: https://www.geckoterminal.com/mantle/
  * - Merchant Moe docs: https://docs.merchantmoe.com/resources/contracts
  * - Agni Finance: https://agni.finance
- *
- * Pool parameters (feeTier, binStep) verified on-chain via Mantle RPC.
- * Full DexScreener snapshot: see dexscreener-pools.json in the same directory.
  */
 
 import type { Network } from "../types.js";
@@ -55,34 +60,27 @@ export interface V3Pair {
 export type DexPair = MoePair | V3Pair;
 
 // ---------------------------------------------------------------------------
-// Token address constants (Mantle mainnet)
+// Token address constants (Mantle mainnet — whitelist-only)
 // ---------------------------------------------------------------------------
 
 export const TOKENS = {
   WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
   USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
   USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
   USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
   WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111",
-  mETH: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
   cmETH: "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA",
   FBTC: "0xC96dE26018A54D51c097160568752c4E3BD6C364",
-  sUSDe: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
   MOE: "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
-  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
   BSB: "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95",
   ELSA: "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA",
   VOOI: "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1",
-  // Added from DexScreener 2026-04-15
-  AUSD: "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a",
-  COOK: "0xEF991B15c54Ed3D4d84493F1B45a9F337c78322e",
-  PUFF: "0x26a6b0dcdCfb981362aFA56D581e4A7dBA3Be140",
-  JOE: "0x371c7ec6D8039ff7933a2AA28EB827Ffe1F52f07",
-  axlUSDC: "0xEB466342C4d449BC9f53A865D5Cb90586f405215"
+  SCOR: "0x8DDB986b11c039a6CC1dbcabd62baE911b348F33"
 } as const;
 
 // ---------------------------------------------------------------------------
-// Merchant Moe Liquidity Book pairs
+// Merchant Moe Liquidity Book pairs (whitelist tokens only)
 // ---------------------------------------------------------------------------
 
 const MOE_PAIRS: MoePair[] = [
@@ -165,33 +163,12 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 25, version: 2
   },
 
-  // ---- ETH derivative pairs (V2.2 pools) ----
-  {
-    provider: "merchant_moe",
-    tokenA: "mETH", tokenB: "WETH",
-    tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.WETH,
-    pool: "0x3b6c029E6409f2868769871F9Ed6825b15BDca15",
-    binStep: 2, version: 2
-  },
-  {
-    provider: "merchant_moe",
-    tokenA: "cmETH", tokenB: "mETH",
-    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.mETH,
-    pool: "0x3d887CE4988fb46AEC6E0027171f65DB3526E5f1",
-    binStep: 1, version: 2
-  },
+  // ---- ETH derivative pairs (V2.2 pools) — cmETH only (mETH not whitelisted) ----
   {
     provider: "merchant_moe",
     tokenA: "WETH", tokenB: "USDT",
     tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDT,
     pool: "0xa15C851Afc33aaB6E478d538a4A8C66cacC19686",
-    binStep: 10, version: 2
-  },
-  {
-    provider: "merchant_moe",
-    tokenA: "mETH", tokenB: "USDT",
-    tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.USDT,
-    pool: "0x3f0047606dCad6177C13742F1854Fc8c999CD2b6",
     binStep: 10, version: 2
   },
   {
@@ -202,30 +179,7 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 10, version: 2
   },
 
-  // ---- AUSD pairs (LB V2.2 pools, from DexScreener 2026-04-15) ----
-  {
-    provider: "merchant_moe",
-    tokenA: "AUSD", tokenB: "USDe",
-    tokenAAddress: TOKENS.AUSD, tokenBAddress: TOKENS.USDe,
-    pool: "0x5A59359a1ad9b0A59aa70145dFeCeb6d9Ee07253",
-    binStep: 1, version: 2, routerVersion: 3
-  },
-  {
-    provider: "merchant_moe",
-    tokenA: "AUSD", tokenB: "USDT",
-    tokenAAddress: TOKENS.AUSD, tokenBAddress: TOKENS.USDT,
-    pool: "0x1f20f0895DF44D33Cf8144a52de811871a21ef4b",
-    binStep: 1, version: 2, routerVersion: 3
-  },
-  {
-    provider: "merchant_moe",
-    tokenA: "WMNT", tokenB: "AUSD",
-    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.AUSD,
-    pool: "0xaa5b9A9b7804d7748b385F758Efb266AA780a982",
-    binStep: 10, version: 2, routerVersion: 3
-  },
-
-  // ---- FBTC pairs (LB V2.2 pools, from DexScreener 2026-04-15) ----
+  // ---- FBTC pairs (LB V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "FBTC", tokenB: "cmETH",
@@ -234,16 +188,7 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 25, version: 2, routerVersion: 3
   },
 
-  // ---- sUSDe pairs (LB V2.2 pool, from DexScreener 2026-04-15) ----
-  {
-    provider: "merchant_moe",
-    tokenA: "sUSDe", tokenB: "USDe",
-    tokenAAddress: TOKENS.sUSDe, tokenBAddress: TOKENS.USDe,
-    pool: "0xE50019C79Cbd7C49cfFA7C3f8080EA238DE75962",
-    binStep: 5, version: 2, routerVersion: 3
-  },
-
-  // ---- cmETH extra pairs (LB V2.2 pools, from DexScreener 2026-04-15) ----
+  // ---- cmETH pairs (LB V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "WETH", tokenB: "cmETH",
@@ -266,7 +211,7 @@ const MOE_PAIRS: MoePair[] = [
     binStep: 10, version: 2, routerVersion: 3
   },
 
-  // ---- Additional WMNT pairs (LB V2.2 pools, from DexScreener 2026-04-15) ----
+  // ---- Additional WMNT pairs (LB V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDT",
@@ -287,20 +232,11 @@ const MOE_PAIRS: MoePair[] = [
     tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.cmETH,
     pool: "0xF0601AA87a7341a38034B49f9517dd3adC2DdeC4",
     binStep: 1, version: 2, routerVersion: 3
-  },
-
-  // ---- PUFF pair (LB V2.2, from DexScreener 2026-04-15) ----
-  {
-    provider: "merchant_moe",
-    tokenA: "PUFF", tokenB: "mETH",
-    tokenAAddress: TOKENS.PUFF, tokenBAddress: TOKENS.mETH,
-    pool: "0x74E0655bC7141314e5bC5b93bc9A83ca80F4fd8a",
-    binStep: 100, version: 2, routerVersion: 3
   }
 ];
 
 // ---------------------------------------------------------------------------
-// Agni Finance V3 pairs
+// Agni Finance V3 pairs (whitelist tokens only)
 // ---------------------------------------------------------------------------
 
 const AGNI_PAIRS: V3Pair[] = [
@@ -318,15 +254,6 @@ const AGNI_PAIRS: V3Pair[] = [
     pool: "0x8e2c009e45420d2b36bc15315f9de8ceca2cc724",
     feeTier: 10000 // 1%
   },
-  {
-    provider: "agni",
-    tokenA: "mETH", tokenB: "WETH",
-    tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.WETH,
-    pool: "0x4f9e3683a523b66da89d82bba0a9caa1c3243df4",
-    feeTier: 500 // 0.05%
-  },
-  // NOTE: USDT0/WMNT removed — pool 0x07c410... has no deployed contract
-  // and Agni factory returns zero-address at all fee tiers.
 
   // ---- USDT pairs on Agni ----
   {
@@ -367,7 +294,7 @@ const AGNI_PAIRS: V3Pair[] = [
     feeTier: 100 // 0.01%
   },
 
-  // ---- New Agni pools (from DexScreener 2026-04-15) ----
+  // ---- cmETH / FBTC / cross-stable pools ----
   {
     provider: "agni",
     tokenA: "FBTC", tokenB: "cmETH",
@@ -405,41 +332,6 @@ const AGNI_PAIRS: V3Pair[] = [
   },
   {
     provider: "agni",
-    tokenA: "cmETH", tokenB: "mETH",
-    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.mETH,
-    pool: "0xf9B5F2bABdD388737BE702Dd732FB6B6Bfe9dc20",
-    feeTier: 100 // 0.01%
-  },
-  {
-    provider: "agni",
-    tokenA: "COOK", tokenB: "USDe",
-    tokenAAddress: TOKENS.COOK, tokenBAddress: TOKENS.USDe,
-    pool: "0x5E91619CF346BF692287AF1E18219CcfFb641c6B",
-    feeTier: 2500 // 0.25%
-  },
-  {
-    provider: "agni",
-    tokenA: "axlUSDC", tokenB: "USDT",
-    tokenAAddress: TOKENS.axlUSDC, tokenBAddress: TOKENS.USDT,
-    pool: "0x628F6a4b26bde4694AE6208E52D0AA2aFF8Ed6C1",
-    feeTier: 100 // 0.01%
-  },
-  {
-    provider: "agni",
-    tokenA: "mETH", tokenB: "USDT",
-    tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.USDT,
-    pool: "0x551D49F0a9C3D5293293E12f36b210e0124dD4E7",
-    feeTier: 2500 // 0.25%
-  },
-  {
-    provider: "agni",
-    tokenA: "FBTC", tokenB: "mETH",
-    tokenAAddress: TOKENS.FBTC, tokenBAddress: TOKENS.mETH,
-    pool: "0x651C9D1F9da787688225f49d63ad1623ba89A8D5",
-    feeTier: 2500 // 0.25%
-  },
-  {
-    provider: "agni",
     tokenA: "WMNT", tokenB: "USDC",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
     pool: "0x1858d52cf57c07A018171D7a1E68DC081F17144f",
@@ -455,29 +347,30 @@ const AGNI_PAIRS: V3Pair[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// xStocks RWA token addresses (Fluxion, all paired with USDC)
-// Source: mantle-xyz/fluxion-mm-monitor-tools configs/pools.yaml
+// xStocks RWA token addresses (Fluxion-only, all paired with USDC, fee_tier=3000)
+//
+// The CLI ONLY routes through the wrapped (`w<TICKER>x`) variant for LP /
+// swap paths — unwrapped forms are tradeable but have no verified pools
+// registered here. Source: asset-whitelist.md.
 // ---------------------------------------------------------------------------
 
 export const XSTOCKS = {
-  wTSLAx: "0x43680abf18cf54898be84c6ef78237cfbd441883",
-  wAAPLx: "0x5aa7649fdbda47de64a07ac81d64b682af9c0724",
-  wCRCLx: "0xa90872aca656ebe47bdebf3b19ec9dd9c5adc7f8",
-  wSPYx: "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02",
-  wHOODx: "0x953707d7a1cb30cc5c636bda8eaebe410341eb14",
-  wMSTRx: "0x266e5923f6118f8b340ca5a23ae7f71897361476",
-  wNVDAx: "0x93e62845c1dd5822ebc807ab71a5fb750decd15a",
-  wGOOGLx: "0x1630f08370917e79df0b7572395a5e907508bbbc",
   wMETAx: "0x4e41a262caa93c6575d336e0a4eb79f3c67caa06",
-  wQQQx: "0xdbd9232fee15351068fe02f0683146e16d9f2cea"
+  wTSLAx: "0x43680abf18cf54898be84c6ef78237cfbd441883",
+  wGOOGLx: "0x1630f08370917e79df0b7572395a5e907508bbbc",
+  wNVDAx: "0x93e62845c1dd5822ebc807ab71a5fb750decd15a",
+  wQQQx: "0xdbd9232fee15351068fe02f0683146e16d9f2cea",
+  wAAPLx: "0x5aa7649fdbda47de64a07ac81d64b682af9c0724",
+  wSPYx: "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02",
+  wMSTRx: "0x266e5923f6118f8b340ca5a23ae7f71897361476"
 } as const;
 
 // ---------------------------------------------------------------------------
-// Fluxion V3 pairs — xStocks RWA pools (all USDC-paired, fee 3000)
+// Fluxion V3 pairs (whitelist tokens only)
 // ---------------------------------------------------------------------------
 
 const FLUXION_PAIRS: V3Pair[] = [
-  // ---- DeFi pairs (fee_tier 3000 = 0.3%) ----
+  // ---- Core DeFi pairs (fee_tier 3000 = 0.3%) ----
   {
     provider: "fluxion",
     tokenA: "WMNT", tokenB: "USDC",
@@ -501,23 +394,9 @@ const FLUXION_PAIRS: V3Pair[] = [
   },
   {
     provider: "fluxion",
-    tokenA: "WETH", tokenB: "mETH",
-    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.mETH,
-    pool: "0xd2ae16b4f4985db367330052b6551387da584f6f",
-    feeTier: 3000
-  },
-  {
-    provider: "fluxion",
     tokenA: "USDC", tokenB: "WETH",
     tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.WETH,
     pool: "0xd6ecefcd6f94073a7837af5c791e2180b6e66b90",
-    feeTier: 3000
-  },
-  {
-    provider: "fluxion",
-    tokenA: "USDC", tokenB: "mETH",
-    tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.mETH,
-    pool: "0xeebc5e596d6c788bcaa5324f44a8f648b746e041",
     feeTier: 3000
   },
   {
@@ -527,15 +406,8 @@ const FLUXION_PAIRS: V3Pair[] = [
     pool: "0xa7c728c4be834ddaf5c49ee4ced678d8aff49de6",
     feeTier: 3000
   },
-  {
-    provider: "fluxion",
-    tokenA: "USDT0", tokenB: "mETH",
-    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.mETH,
-    pool: "0x9756d5b60fe70ba41cd4d01fe04779f556c4b75d",
-    feeTier: 3000
-  },
 
-  // ---- Ecosystem token pairs (fee_tier 3000 = 0.3%) ----
+  // ---- Community / ecosystem token pairs (fee_tier 3000) ----
   {
     provider: "fluxion",
     tokenA: "USDT0", tokenB: "BSB",
@@ -557,8 +429,6 @@ const FLUXION_PAIRS: V3Pair[] = [
     pool: "0x2305ad92740d186bf3834d4cca2eee1b3d5fa3fe",
     feeTier: 3000
   },
-
-  // ---- New Fluxion pool (from DexScreener 2026-04-15) ----
   {
     provider: "fluxion",
     tokenA: "ELSA", tokenB: "WMNT",
@@ -567,7 +437,7 @@ const FLUXION_PAIRS: V3Pair[] = [
     feeTier: 3000
   },
 
-  // ---- xStocks RWA pairs (USDC / xToken, fee_tier 3000 = 0.3%) ----
+  // ---- xStocks RWA pairs (USDC / wTicker, fee_tier 3000 = 0.3%) ----
   {
     provider: "fluxion",
     tokenA: "USDC", tokenB: "wTSLAx",
@@ -584,23 +454,9 @@ const FLUXION_PAIRS: V3Pair[] = [
   },
   {
     provider: "fluxion",
-    tokenA: "USDC", tokenB: "wCRCLx",
-    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wCRCLx,
-    pool: "0x43cf441f5949d52faa105060239543492193c87e",
-    feeTier: 3000
-  },
-  {
-    provider: "fluxion",
     tokenA: "USDC", tokenB: "wSPYx",
     tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wSPYx,
     pool: "0x373f7a2b95f28f38500eb70652e12038cca3bab8",
-    feeTier: 3000
-  },
-  {
-    provider: "fluxion",
-    tokenA: "USDC", tokenB: "wHOODx",
-    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wHOODx,
-    pool: "0x4e23bb828e51cbc03c81d76c844228cc75f6a287",
     feeTier: 3000
   },
   {

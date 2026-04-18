@@ -4,7 +4,7 @@ import { __testFetchTokenPriceUsd as fetchTokenPriceUsd } from "@mantleio/mantle
 
 // Canonical Mantle addresses (all lowercase in URLs).
 const WMNT = "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8";
-const METH = "0xcda86a272531e8640cd7f1a92c01839911b90bb0";
+const METH = "0xe6829d9a7ee3040e1276fa75293bde931859e8fa";
 const USDC = "0x09bc4e0d864854c6afb6eb9a9cdf58ac190d0df9";
 
 /* ------------------------------------------------------------------ */
@@ -153,7 +153,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const result = await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -174,7 +174,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -194,7 +194,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -212,7 +212,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -231,7 +231,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -250,7 +250,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -269,7 +269,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -288,7 +288,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -303,7 +303,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     installFetchRouter({ coingecko: {}, dexscreener: {}, defillama: {} });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -320,7 +320,7 @@ describe("token.ts getTokenPrices — cross-source validation", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -348,7 +348,7 @@ describe("token.ts — DexScreener pair selection", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -370,7 +370,7 @@ describe("token.ts — DexScreener pair selection", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     })).prices[0];
@@ -384,7 +384,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500 } });
 
     await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -402,7 +402,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500 } });
 
     await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -418,7 +418,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500 } });
 
     await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -433,7 +433,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500 } });
 
     await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -449,7 +449,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500, [USDC]: 1.0 } });
 
     await getTokenPrices({
-      tokens: ["mETH", "USDC"],
+      tokens: ["cmETH", "USDC"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -463,7 +463,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500, [USDC]: 1.0 } });
 
     await getTokenPrices({
-      tokens: ["mETH", "USDC"],
+      tokens: ["cmETH", "USDC"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -479,7 +479,7 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
     const tally = installFetchRouter({ coingecko: { [METH]: 2500, [USDC]: 1.0 } });
 
     await getTokenPrices({
-      tokens: ["mETH", "USDC"],
+      tokens: ["cmETH", "USDC"],
       base_currency: "usd",
       network: "mainnet"
     });
@@ -491,9 +491,9 @@ describe("token.ts — CoinGecko tier auto-detection", () => {
 
 describe("token.ts — MNT base currency confidence compounding", () => {
   it("compounds to the lower confidence when MNT/USD is weak", async () => {
-    // mETH: 3 sources agree → high confidence
+    // cmETH: 3 sources agree → high confidence
     // WMNT: only DefiLlama → low confidence
-    // Result confidence for mETH quoted in MNT must be "low" (the weaker side).
+    // Result confidence for cmETH quoted in MNT must be "low" (the weaker side).
     installFetchRouter({
       coingecko: { [METH]: 2500 },
       dexscreener: {
@@ -504,13 +504,13 @@ describe("token.ts — MNT base currency confidence compounding", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "mnt",
       network: "mainnet"
     })).prices[0];
 
     expect(p.price).toBe(2500); // 2500 USD / 1 USD-per-MNT
-    expect(p.confidence).toBe("low"); // lower of high (mETH) and low (MNT)
+    expect(p.confidence).toBe("low"); // lower of high (cmETH) and low (MNT)
   });
 
   it("prefixes MNT-side warnings with 'MNT: ' when quoting in MNT", async () => {
@@ -524,7 +524,7 @@ describe("token.ts — MNT base currency confidence compounding", () => {
     });
 
     const p = (await getTokenPrices({
-      tokens: ["mETH"],
+      tokens: ["cmETH"],
       base_currency: "mnt",
       network: "mainnet"
     })).prices[0];

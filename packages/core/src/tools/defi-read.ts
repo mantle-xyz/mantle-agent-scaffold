@@ -2861,7 +2861,7 @@ export const defiReadTools: Record<string, Tool> = {
   getPoolOpportunities: {
     name: "mantle_getPoolOpportunities",
     description:
-      "Scan and rank candidate pools for a token pair on Mantle DEXes. Examples: token_a='MNT' (native mapped to WMNT 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8), token_b='mETH' 0xcDA86A272531e8640cD7F1a92c01839911B90bb0.",
+      "Scan and rank candidate pools for a token pair on Mantle DEXes. Examples: token_a='MNT' (native mapped to WMNT 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8), token_b='cmETH' 0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2904,7 +2904,7 @@ export const defiReadTools: Record<string, Tool> = {
       "Each market includes: supply/borrow APY, TVL, LTV, liquidation threshold, " +
       "isolation_mode (bool), debt_ceiling_usd, borrowable_in_isolation (bool), borrowing_enabled.\n\n" +
       "Isolation Mode assets (WETH, WMNT): supplying them as your ONLY collateral restricts " +
-      "borrows to assets with borrowable_in_isolation=true (USDC, USDT0, USDe, GHO).\n\n" +
+      "borrows to assets with borrowable_in_isolation=true (USDC, USDT0, USDe).\n\n" +
       "Examples:\n- All markets: protocol='aave_v3'\n- Single market: protocol='aave_v3', asset='USDC'",
     inputSchema: {
       type: "object",

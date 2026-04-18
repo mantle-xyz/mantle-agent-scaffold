@@ -13,11 +13,17 @@
  *   1. 从 DexScreener 拉取 Mantle 上的 pool 列表
  *        a. 以"种子代币"为锚点逐个调用
  *             GET /token-pairs/v1/mantle/{tokenAddr}
- *        b. 所有返回结果按 pairAddress 去重做并集
- *   2. 过滤规则（与现有 _meta.filter 完全保持一致）
+ *        b. 种子列表 = packages/core/src/config/registry.json 中
+ *           (category=token ∧ environment=mainnet) 的全部条目 — 即 OpenClaw ×
+ *           Mantle 的 token 白名单。registry 一变，下次 refresh 自动跟随。
+ *        c. 所有返回结果按 pairAddress 去重做并集
+ *   2. 过滤规则（OpenClaw × Mantle 白名单 + 支持的 DEX）
  *        - chainId === "mantle"
  *        - dexId ∈ { agni | merchantmoe | fluxion_factory_address }
- *        - liquidity.usd >= MIN_LIQUIDITY_USD (默认 1000)
+ *        - pool 的 baseToken **和** quoteToken 地址都必须在白名单集合里
+ *          （见上面的种子列表来源）。任一侧不在白名单 → 整个 pool 丢弃。
+ *        - 不再设置 liquidity.usd 门槛 — 只要双侧 token 在白名单就保留，
+ *          让低 TVL 的新池也能被 runtime 看到。
  *   3. 通过一条【无限制 RPC】(由 MANTLE_RPC_URL 环境变量指定) 到 Mantle
  *      主网做 multicall 链上核验：
  *        - ERC20.symbol()         → 校验 base/quote token 符号
@@ -44,8 +50,8 @@
  *   # 使用你的"无限制" RPC 做链上核验并写回文件
  *   MANTLE_RPC_URL=https://your-unlimited-rpc node scripts/refresh-pools.mjs
  *
- *   # 调高最小 liquidity 门槛（默认 1000 USD）
- *   MIN_LIQUIDITY_USD=5000 node scripts/refresh-pools.mjs
+ *   # 查看被白名单过滤器剔除的每个 pool 的原因
+ *   node scripts/refresh-pools.mjs --verbose
  *
  * 代理
  * ────
@@ -81,17 +87,38 @@ const execFileP = promisify(execFile);
 const DRY_RUN = process.argv.includes("--dry-run");
 const VERBOSE = process.argv.includes("--verbose") || process.argv.includes("-v");
 
-const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD ?? 1000);
-if (!Number.isFinite(MIN_LIQUIDITY_USD) || MIN_LIQUIDITY_USD < 0) {
-  console.error(`MIN_LIQUIDITY_USD 非法: ${process.env.MIN_LIQUIDITY_USD}`);
-  process.exit(1);
-}
-
 // ─── 路径 ────────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const JSON_PATH = join(
   __dirname,
   "../packages/core/src/config/dexscreener-pools.json"
+);
+const REGISTRY_PATH = join(
+  __dirname,
+  "../packages/core/src/config/registry.json"
+);
+
+// ─── 白名单 ──────────────────────────────────────────────────────────────────
+// 从 canonical registry.json 读出 (category=token ∧ environment=mainnet) 的
+// 所有条目，形成 token 白名单。refresh-pools.mjs 只会把 baseToken **和**
+// quoteToken 同时落在这个集合里的 pool 写入 snapshot。registry 一更新，
+// 下次刷新自动跟随 — 不需要也不应该在本脚本里维护重复的硬编码列表。
+const REGISTRY = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
+const WHITELIST_TOKENS = (REGISTRY.contracts ?? []).filter(
+  (c) => c.category === "token" && c.environment === "mainnet"
+);
+if (WHITELIST_TOKENS.length === 0) {
+  console.error(
+    `registry.json (${REGISTRY_PATH}) 里没有 category=token ∧ environment=mainnet 的条目，` +
+    `无法继续 — 白名单为空会把所有 pool 过滤掉。`
+  );
+  process.exit(1);
+}
+const WHITELIST_ADDRS = new Set(
+  WHITELIST_TOKENS.map((t) => (t.address ?? "").toLowerCase()).filter(Boolean)
+);
+const WHITELIST_SYMBOL_BY_ADDR = new Map(
+  WHITELIST_TOKENS.map((t) => [(t.address ?? "").toLowerCase(), t.key])
 );
 
 // ─── 颜色 ────────────────────────────────────────────────────────────────────
@@ -166,46 +193,12 @@ function dexIdToProvider(dexId) {
   return null;
 }
 
-// 种子代币 — 与 MANTLE_TOKENS (packages/core/src/config/tokens.ts) 保持大致
-// 一致。列表需要时可以手动扩充；漏掉某个热门 token 不会导致 pool 真正"丢
-// 失"（因为别的 token 多半在同一池子里），但加上可以减少一次查询失败的
-// 影响半径。
-const SEED_TOKENS = [
-  // 基础资产 / 稳定币
-  "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8", // WMNT
-  "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", // WETH
-  "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9", // USDC
-  "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE", // USDT
-  "0x779Ded0c9e1022225f8E0630b35a9b54bE713736", // USDT0
-  "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34", // USDe
-  "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", // sUSDe
-  "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73", // GHO
-  "0x051665f2455116e929b9972c36d23070F5054Ce0", // syrupUSDT
-  // ETH 质押 / 再质押
-  "0xcDA86A272531e8640cD7F1a92c01839911B90bb0", // mETH
-  "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA", // cmETH
-  "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74", // wrsETH
-  // BTC
-  "0xC96dE26018A54D51c097160568752c4E3BD6C364", // FBTC
-  // DEX 生态
-  "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9", // MOE
-  // xStocks (RWA 股权)
-  "0x43680abf18cf54898be84c6ef78237cfbd441883", // wTSLAx
-  "0x5aa7649fdbda47de64a07ac81d64b682af9c0724", // wAAPLx
-  "0x93e62845c1dd5822ebc807ab71a5fb750decd15a", // wNVDAx
-  "0x1630f08370917e79df0b7572395a5e907508bbbc", // wGOOGLx
-  "0x4e41a262caa93c6575d336e0a4eb79f3c67caa06", // wMETAx
-  "0xdbd9232fee15351068fe02f0683146e16d9f2cea", // wQQQx
-  "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02", // wSPYx
-  "0x266e5923f6118f8b340ca5a23ae7f71897361476", // wMSTRx
-  "0x953707d7a1cb30cc5c636bda8eaebe410341eb14", // wHOODx
-  "0xa90872aca656ebe47bdebf3b19ec9dd9c5adc7f8", // wCRCLx
-  // Fluxion ecosystem
-  "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95", // BSB
-  "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA", // ELSA
-  "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1", // VOOI
-  "0x8DDB986b11c039a6CC1dbcabd62baE911b348F33", // SCOR
-];
+// 种子代币 — 从白名单派生。每个白名单 token 都作为一次
+// GET /token-pairs/v1/mantle/{addr} 查询的锚点，然后所有返回的 pair 按
+// pairAddress 合并去重。因为 filterPools 要求 pool 的两侧都在白名单，所以
+// 每个合格 pool 会被它自己的 base 和 quote 两次命中 — 天然冗余，任何单次
+// 查询失败也不会让 pool 丢失（除非它的 base 和 quote 都没返回）。
+const SEED_TOKENS = WHITELIST_TOKENS.map((t) => t.address);
 
 // ─── ABI 片段 ────────────────────────────────────────────────────────────────
 const ERC20_ABI = [
@@ -355,13 +348,17 @@ async function fetchDexScreenerPools() {
   return [...byAddr.values()];
 }
 
-// ─── 步骤 2：按 provider + liquidity 筛选 ────────────────────────────────────
+// ─── 步骤 2：按 provider + 白名单筛选 ────────────────────────────────────────
 function filterPools(rawPairs) {
-  log(`\n${BOLD}[2/4] 按规则筛选${RESET} ${DIM}(provider ∈ {agni, merchant_moe, fluxion}，liq ≥ $${MIN_LIQUIDITY_USD})${RESET}`);
+  log(
+    `\n${BOLD}[2/4] 按规则筛选${RESET} ` +
+    `${DIM}(provider ∈ {agni, merchant_moe, fluxion}，base & quote 都必须在白名单 ${WHITELIST_ADDRS.size} 个 token 内)${RESET}`
+  );
 
   const stats = {
     wrongProvider: 0,
-    lowLiquidity: 0,
+    nonWhitelistBase: 0,
+    nonWhitelistQuote: 0,
     missingToken: 0,
     kept: 0,
   };
@@ -370,12 +367,6 @@ function filterPools(rawPairs) {
   for (const pair of rawPairs) {
     const provider = dexIdToProvider(pair.dexId);
     if (!provider) { stats.wrongProvider++; continue; }
-
-    const liqUsd = Number(pair.liquidity?.usd ?? 0);
-    if (!Number.isFinite(liqUsd) || liqUsd < MIN_LIQUIDITY_USD) {
-      stats.lowLiquidity++;
-      continue;
-    }
 
     const baseAddr = pair.baseToken?.address;
     const quoteAddr = pair.quoteToken?.address;
@@ -388,6 +379,29 @@ function filterPools(rawPairs) {
       continue;
     }
 
+    // 白名单筛选 — 两侧都必须在。OpenClaw × Mantle 的 Hard Constraint #10：
+    // 任何涉及非白名单资产的 pool 都不能进入 CLI 的 approve/plan/quote 路径。
+    const baseInList = WHITELIST_ADDRS.has(baseAddr.toLowerCase());
+    const quoteInList = WHITELIST_ADDRS.has(quoteAddr.toLowerCase());
+    if (!baseInList) {
+      stats.nonWhitelistBase++;
+      dim(
+        `丢弃非白名单 base: ${pair.baseToken.symbol ?? "?"} (${baseAddr}) ` +
+        `@ ${provider} ${pair.pairAddress}`
+      );
+      continue;
+    }
+    if (!quoteInList) {
+      stats.nonWhitelistQuote++;
+      dim(
+        `丢弃非白名单 quote: ${pair.quoteToken.symbol ?? "?"} (${quoteAddr}) ` +
+        `@ ${provider} ${pair.pairAddress}`
+      );
+      continue;
+    }
+
+    const liqUsd = Number(pair.liquidity?.usd ?? 0);
+
     kept.push({
       provider,
       pool: cs(pair.pairAddress) ?? pair.pairAddress,
@@ -399,15 +413,16 @@ function filterPools(rawPairs) {
         symbol: pair.quoteToken.symbol ?? "?",
         address: cs(quoteAddr) ?? quoteAddr,
       },
-      liquidityUsd: Math.round(liqUsd),
+      liquidityUsd: Number.isFinite(liqUsd) ? Math.round(liqUsd) : 0,
     });
     stats.kept++;
   }
 
-  ok(`保留 ${stats.kept} 个 pool`);
+  ok(`保留 ${stats.kept} 个 pool（两侧均在白名单）`);
   dim(
     `过滤掉：provider 不符=${stats.wrongProvider}，` +
-    `流动性 < $${MIN_LIQUIDITY_USD}=${stats.lowLiquidity}，` +
+    `base 不在白名单=${stats.nonWhitelistBase}，` +
+    `quote 不在白名单=${stats.nonWhitelistQuote}，` +
     `地址缺失/非法=${stats.missingToken}`
   );
   return kept;
@@ -661,10 +676,15 @@ function mergeAndWrite(verified, droppedCount) {
     _meta: {
       source: "https://dexscreener.com/mantle",
       fetched_at: today,
-      filter: `liquidity_usd >= ${MIN_LIQUIDITY_USD}`,
+      filter:
+        "both_tokens_whitelisted (registry.json category=token, environment=mainnet); " +
+        "no liquidity threshold",
+      whitelist_size: WHITELIST_ADDRS.size,
       total_pools: merged.length,
       notes:
-        "Only merchant_moe, agni, fluxion pools. Pool parameters " +
+        "Only merchant_moe, agni, fluxion pools whose base AND quote tokens " +
+        "are both in the OpenClaw × Mantle whitelist (see " +
+        "packages/core/src/config/registry.json). Pool parameters " +
         "(feeTier, binStep) verified on-chain via Mantle RPC. " +
         "Refreshed via scripts/refresh-pools.mjs.",
     },
@@ -710,7 +730,7 @@ async function main() {
   log(`模式    : ${DRY_RUN ? `${YELLOW}--dry-run（只预览）${RESET}` : "写入"}`);
   log(`RPC     : ${RPC_URLS[0]}${process.env.MANTLE_RPC_URL ? "" : ` ${YELLOW}(建议设置 MANTLE_RPC_URL 指向无限制 RPC)${RESET}`}`);
   log(`HTTP    : ${HTTP_MODE}${PROXY_ENV ? ` ${DIM}(detected proxy ${PROXY_ENV})${RESET}` : ""}`);
-  log(`最小流动性: $${MIN_LIQUIDITY_USD.toLocaleString()}`);
+  log(`白名单  : ${WHITELIST_ADDRS.size} 个 mainnet token (from registry.json)`);
 
   const rawPairs = await fetchDexScreenerPools();
   if (rawPairs.length === 0) {
@@ -720,7 +740,10 @@ async function main() {
 
   const candidates = filterPools(rawPairs);
   if (candidates.length === 0) {
-    bad("筛选后没有 pool — 请检查 MIN_LIQUIDITY_USD / dexId 映射是否正确");
+    bad(
+      "筛选后没有 pool — 请检查 registry.json 里的 mainnet token 是否正确" +
+      "，或者 DexScreener 返回的 dexId 是否与我们支持的映射对得上"
+    );
     process.exit(1);
   }
 

@@ -24,11 +24,18 @@ describe("resources", () => {
     expect(payload.native_token.symbol).toBe("MNT");
   });
 
-  it("returns protocol registry with Ondo marked planned", () => {
+  it("returns protocol registry containing whitelisted DEXes and Aave V3", () => {
+    // Ondo was dropped from the registry when it could not ship with a
+    // verified mainnet address; the protocol catalog now only lists
+    // contracts on the OpenClaw × Mantle whitelist.
     const result = readResource("mantle://registry/protocols");
     expect(result).not.toBeNull();
     const payload = JSON.parse(result!.content);
-    expect(payload.mainnet.ondo.status).toBe("planned");
+    for (const proto of ["agni", "fluxion", "merchant_moe", "aave_v3", "wmnt"]) {
+      expect(payload.mainnet[proto]).toBeDefined();
+      expect(payload.mainnet[proto].status).toBe("enabled");
+    }
+    expect(payload.mainnet.ondo).toBeUndefined();
   });
 
   it("returns network basics and risk checklist docs", () => {

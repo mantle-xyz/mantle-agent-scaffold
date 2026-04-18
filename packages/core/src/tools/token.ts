@@ -874,7 +874,7 @@ export const tokenTools: Record<string, Tool> = {
   resolveToken: {
     name: "mantle_resolveToken",
     description:
-      "Resolve token symbol using quick reference plus canonical token-list cross-check. Examples: symbol='USDC' -> 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9, symbol='mETH' -> 0xcDA86A272531e8640cD7F1a92c01839911B90bb0.",
+      "Resolve token symbol using quick reference plus canonical token-list cross-check. Examples: symbol='USDC' -> 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9, symbol='cmETH' -> 0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA.",
     inputSchema: {
       type: "object",
       properties: {

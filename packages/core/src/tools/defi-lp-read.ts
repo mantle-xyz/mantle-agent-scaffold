@@ -2188,7 +2188,7 @@ async function discoverTopPools(
     DEX_TOKENS.USDC,
     DEX_TOKENS.USDT0,
     DEX_TOKENS.WETH,
-    DEX_TOKENS.mETH,
+    DEX_TOKENS.cmETH,
     DEX_TOKENS.USDT,
     DEX_TOKENS.USDe
   ];

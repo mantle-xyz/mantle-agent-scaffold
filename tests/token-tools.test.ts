@@ -100,7 +100,7 @@ describe("token tools", () => {
     });
   });
 
-  it("prices MNT from WMNT quote path and does not confuse it with mETH", async () => {
+  it("prices MNT from WMNT quote path and does not confuse it with cmETH", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes("api.dexscreener.com/tokens/v1/mantle/0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8")) {
@@ -109,7 +109,7 @@ describe("token tools", () => {
           { status: 200 }
         );
       }
-      if (url.includes("api.dexscreener.com/tokens/v1/mantle/0xcda86a272531e8640cd7f1a92c01839911b90bb0")) {
+      if (url.includes("api.dexscreener.com/tokens/v1/mantle/0xe6829d9a7ee3040e1276fa75293bde931859e8fa")) {
         return new Response(
           JSON.stringify([{ priceUsd: "2500" }]),
           { status: 200 }
@@ -127,13 +127,13 @@ describe("token tools", () => {
     expect(mntOnly.prices[0].price).toBe(1.23);
 
     const both = await getTokenPrices({
-      tokens: ["MNT", "mETH"],
+      tokens: ["MNT", "cmETH"],
       base_currency: "usd",
       network: "mainnet"
     });
     expect(both.prices[0].symbol).toBe("MNT");
     expect(both.prices[0].price).toBe(1.23);
-    expect(both.prices[1].symbol).toBe("mETH");
+    expect(both.prices[1].symbol).toBe("cmETH");
     expect(both.prices[1].price).toBe(2500);
   });
 });

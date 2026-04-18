@@ -164,12 +164,14 @@ async function main() {
 
   const WMNT = "0x78c1B0C915c4FAA5FffA6CAbf0219DA63d7f4cb8";
   const USDC = "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9";
-  const METH = "0xcDA86A272531e8640cD7F1a92c01839911B90bb0";
+  // cmETH is the whitelisted ETH-restaked derivative on Mantle (mETH is NOT
+  // on the whitelist and is intentionally excluded here).
+  const CMETH = "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA";
 
   for (const [name, addr, expectRange] of [
     ["WMNT", WMNT, [0.3, 3.0]],
     ["USDC", USDC, [0.98, 1.02]],
-    ["mETH", METH, [800, 10000]]
+    ["cmETH", CMETH, [800, 10000]]
   ]) {
     const price = await fetchWriteTokenPriceUsd("mainnet", addr);
     const [lo, hi] = expectRange;

@@ -140,7 +140,7 @@ async function parseUnitsHandler(
     throw new MantleMcpError(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
-      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC). Do NOT guess token decimals.",
+      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (FBTC). Do NOT guess token decimals.",
       { decimals }
     );
   }
@@ -183,7 +183,7 @@ async function formatUnitsHandler(
     throw new MantleMcpError(
       "INVALID_INPUT",
       "decimals must be an integer between 0 and 77.",
-      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (WBTC). Do NOT guess token decimals.",
+      "Common values: 18 (MNT/WETH), 6 (USDC/USDT), 8 (FBTC). Do NOT guess token decimals.",
       { decimals }
     );
   }
@@ -454,7 +454,7 @@ export const utilsTools: Record<string, Tool> = {
       "Examples:\n" +
       "- 100 USDC (6 decimals): amount='100', decimals=6 → '100000000'\n" +
       "- 1.5 ETH (18 decimals): amount='1.5', decimals=18 → '1500000000000000000'\n" +
-      "- 0.001 WBTC (8 decimals): amount='0.001', decimals=8 → '100000'",
+      "- 0.001 FBTC (8 decimals): amount='0.001', decimals=8 → '100000'",
     inputSchema: {
       type: "object",
       properties: {
@@ -465,7 +465,7 @@ export const utilsTools: Record<string, Tool> = {
         decimals: {
           type: "number",
           description:
-            "Token decimals (default: 18). Common: 18 (MNT/WETH/mETH), 6 (USDC/USDT), 8 (WBTC)."
+            "Token decimals (default: 18). Common: 18 (MNT/WETH/cmETH), 6 (USDC/USDT/USDT0), 8 (FBTC)."
         }
       },
       required: ["amount"]
@@ -491,7 +491,7 @@ export const utilsTools: Record<string, Tool> = {
         decimals: {
           type: "number",
           description:
-            "Token decimals (default: 18). Common: 18 (MNT/WETH/mETH), 6 (USDC/USDT), 8 (WBTC)."
+            "Token decimals (default: 18). Common: 18 (MNT/WETH/cmETH), 6 (USDC/USDT/USDT0), 8 (FBTC)."
         }
       },
       required: ["amount_raw"]

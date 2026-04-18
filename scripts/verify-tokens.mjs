@@ -23,26 +23,31 @@ const NETWORKS = {
 };
 
 // Expected values, drawn from packages/core/src/config/tokens.ts
+// Aligned to the OpenClaw × Mantle whitelist (see skills/mantle-openclaw-competition/references/asset-whitelist.md).
+// Non-whitelist tokens (e.g. mETH, sUSDe, GHO, wrsETH, syrupUSDT, wHOODx, wCRCLx)
+// are intentionally excluded — do not add them back.
 const EXPECTED = {
   mainnet: [
-    // Majors
+    // Core (9; MNT is native, no contract)
     ["WMNT", "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8", 18, "Wrapped Mantle"],
     ["WETH", "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", 18, "Wrapped Ether"],
     ["USDC", "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9", 6, "USD Coin"],
     ["USDT", "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE", 6, "Tether"],
     ["USDT0", "0x779Ded0c9e1022225f8E0630b35a9b54bE713736", 6, "USDT0"],
     ["USDe", "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34", 18, "USDe"],
-    ["sUSDe", "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", 18, "Staked USDe"],
-    // LSTs / BTC / yield
-    ["mETH", "0xcDA86A272531e8640cD7F1a92c01839911B90bb0", 18, "Mantle Staked ETH"],
     ["cmETH", "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA", 18, "Restaked mETH"],
     ["FBTC", "0xC96dE26018A54D51c097160568752c4E3BD6C364", 8, "FBTC"],
-    ["wrsETH", "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74", 18, "Wrapped rsETH"],
-    ["syrupUSDT", "0x051665f2455116e929b9972c36d23070F5054Ce0", 6, "Syrup USDT"],
-    // DEX / governance / misc
     ["MOE", "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9", 18, "Moe Token"],
-    ["GHO", "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73", 18, "GHO"],
-    // xStocks (RWA equities)
+    // xStocks unwrapped (8) — Fluxion-only, USDC-paired
+    ["METAx", "0x96702be57Cd9777f835117a809C7124fe4ec989A", 18, "Meta xStock"],
+    ["TSLAx", "0x8aD3c73F833d3F9A523aB01476625F269aEB7Cf0", 18, "Tesla xStock"],
+    ["GOOGLx", "0xe92f673Ca36C5E2Efd2DE7628f815f84807e803F", 18, "Alphabet xStock"],
+    ["NVDAx", "0xc845b2894dBddd03858fd2D643B4eF725fE0849d", 18, "NVIDIA xStock"],
+    ["QQQx", "0xa753A7395cAe905Cd615Da0B82A53E0560f250af", 18, "Nasdaq xStock"],
+    ["AAPLx", "0x9d275685dC284C8eB1C79f6ABA7a63Dc75ec890a", 18, "Apple xStock"],
+    ["SPYx", "0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48", 18, "S&P 500 xStock"],
+    ["MSTRx", "0xAE2f842EF90C0d5213259Ab82639D5BBF649b08E", 18, "MicroStrategy xStock"],
+    // xStocks wrapped (8)
     ["wTSLAx", "0x43680abf18cf54898be84c6ef78237cfbd441883", 18, "Tesla xStock"],
     ["wAAPLx", "0x5aa7649fdbda47de64a07ac81d64b682af9c0724", 18, "Apple xStock"],
     ["wNVDAx", "0x93e62845c1dd5822ebc807ab71a5fb750decd15a", 18, "Nvidia xStock"],
@@ -51,9 +56,7 @@ const EXPECTED = {
     ["wQQQx", "0xdbd9232fee15351068fe02f0683146e16d9f2cea", 18, "Nasdaq xStock"],
     ["wSPYx", "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02", 18, "S&P 500 xStock"],
     ["wMSTRx", "0x266e5923f6118f8b340ca5a23ae7f71897361476", 18, "MicroStrategy xStock"],
-    ["wHOODx", "0x953707d7a1cb30cc5c636bda8eaebe410341eb14", 18, "Robinhood xStock"],
-    ["wCRCLx", "0xa90872aca656ebe47bdebf3b19ec9dd9c5adc7f8", 18, "Circle xStock"],
-    // Fluxion ecosystem
+    // Fluxion ecosystem / community (4)
     ["BSB", "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95", 18, "BSB"],
     ["ELSA", "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA", 18, "ELSA"],
     ["VOOI", "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1", 18, "VOOI"],

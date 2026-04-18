@@ -1,11 +1,18 @@
 /**
- * Aave V3 Mantle reserve assets — hardcoded from the official aave-address-book.
+ * Aave V3 Mantle reserve assets — strictly filtered to the OpenClaw /
+ * RealClaw whitelist.
  *
  * Source: https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts
+ * Whitelist: skills/mantle-openclaw-competition/references/asset-whitelist.md
+ *
+ * NOTE: the Aave Pool lists additional reserves on-chain (sUSDe, syrupUSDT,
+ * wrsETH, GHO). Those are NOT on the whitelist and have been removed from
+ * this table so that tx builders cannot route through them. The `id` field
+ * is preserved verbatim from the on-chain reserve index — do not renumber.
  *
  * Each entry contains the underlying token, its Aave aToken (deposit receipt),
  * and variable debt token. Agents can use this registry to:
- *  - Know which assets are eligible for supply/borrow on Aave V3
+ *  - Know which whitelisted assets are eligible for supply/borrow on Aave V3
  *  - Resolve aToken/debtToken addresses for portfolio valuation
  *  - Skip on-chain lookups for known reserves
  */
@@ -101,17 +108,6 @@ export const AAVE_V3_MANTLE_RESERVES: AaveReserveAsset[] = [
     borrowableInIsolation: true
   },
   {
-    id: 5,
-    symbol: "sUSDe",
-    underlying: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
-    aToken: "0xaf972F332FF79bd32A6CB6B54f903eA0F9b16C2a",
-    variableDebtToken: "0xc42B44c65bBe7AA8E5b02416918688c244ec7847",
-    decimals: 18,
-    isolationMode: false,
-    debtCeilingUsd: 0,
-    borrowableInIsolation: false
-  },
-  {
     id: 6,
     symbol: "FBTC",
     underlying: "0xC96dE26018A54D51c097160568752c4E3BD6C364",
@@ -121,39 +117,6 @@ export const AAVE_V3_MANTLE_RESERVES: AaveReserveAsset[] = [
     isolationMode: false,
     debtCeilingUsd: 0,
     borrowableInIsolation: false
-  },
-  {
-    id: 7,
-    symbol: "syrupUSDT",
-    underlying: "0x051665f2455116e929b9972c36d23070F5054Ce0",
-    aToken: "0xF8400F3FA9cD9F9E84e93cD9De9f14EB7B5b59b5",
-    variableDebtToken: "0x2E20c5291CD675bFe52a533a6208588f5484999e",
-    decimals: 6,
-    isolationMode: false,
-    debtCeilingUsd: 0,
-    borrowableInIsolation: false
-  },
-  {
-    id: 8,
-    symbol: "wrsETH",
-    underlying: "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74",
-    aToken: "0x5cC6999aC46F4627309a7ce0F321a3f45D138ED5",
-    variableDebtToken: "0x7C5549DE0dEb930bAb1e11B075151a19e400605c",
-    decimals: 18,
-    isolationMode: false,
-    debtCeilingUsd: 0,
-    borrowableInIsolation: false
-  },
-  {
-    id: 9,
-    symbol: "GHO",
-    underlying: "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73",
-    aToken: "0x8917d4eE4609f991b559DAF8D0aD1b892c13B127",
-    variableDebtToken: "0xeE1eABe23fA42028809F587B8fE1936b154d2620",
-    decimals: 18,
-    isolationMode: false,
-    debtCeilingUsd: 0,
-    borrowableInIsolation: true
   }
 ];
 

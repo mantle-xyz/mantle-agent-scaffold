@@ -1,8 +1,8 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "1.2.0",
   "network": "mantle",
   "updated_at": "2026-04-18T00:00:00Z",
-  "notes": "Curated Mantle registry used by mantle_resolveAddress. Token entries carry an ERC-20 `decimals` field verified on-chain; non-token entries omit it.",
+  "notes": "OpenClaw / RealClaw x Mantle whitelist registry. Authoritative source: skills/mantle-openclaw-competition/references/asset-whitelist.md. Only the tokens and protocol contracts listed here may participate in any CLI plan, quote, approve, or unsigned-tx flow. MNT is the native gas token and has no contract entry (use WMNT for ERC-20 interactions). Any asset/contract not in this file MUST be refused per Hard Constraint #10.",
   "chain_ids": {
     "mainnet": 5000,
     "testnet": 5003
@@ -99,32 +99,17 @@
       }
     },
     {
-      "key": "sUSDe",
-      "label": "Staked USDe",
+      "key": "MOE",
+      "label": "Moe Token",
       "environment": "mainnet",
       "category": "token",
-      "address": "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
+      "address": "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
       "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["SUSDE"],
+      "aliases": ["Merchant Moe"],
       "source": {
-        "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-18T00:00:00Z"
-      }
-    },
-    {
-      "key": "mETH",
-      "label": "Mantle Staked ETH",
-      "environment": "mainnet",
-      "category": "token",
-      "address": "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
-      "decimals": 18,
-      "status": "active",
-      "is_official": true,
-      "aliases": ["METH"],
-      "source": {
-        "url": "https://token-list.mantle.xyz",
+        "url": "https://docs.merchantmoe.com",
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
@@ -158,61 +143,138 @@
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
+
     {
-      "key": "wrsETH",
-      "label": "Wrapped rsETH",
+      "key": "METAx",
+      "label": "Meta xStock",
       "environment": "mainnet",
       "category": "token",
-      "address": "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74",
+      "address": "0x96702be57Cd9777f835117a809C7124fe4ec989A",
       "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["WRSETH", "rsETHWrapper"],
+      "aliases": ["METAX"],
       "source": {
         "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
-      "key": "syrupUSDT",
-      "label": "Syrup USDT",
+      "key": "TSLAx",
+      "label": "Tesla xStock",
       "environment": "mainnet",
       "category": "token",
-      "address": "0x051665f2455116e929b9972c36d23070F5054Ce0",
-      "decimals": 6,
+      "address": "0x8aD3c73F833d3F9A523aB01476625F269aEB7Cf0",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["SYRUPUSDT"],
+      "aliases": ["TSLAX"],
       "source": {
         "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
-      "key": "MOE",
-      "label": "Moe Token",
+      "key": "GOOGLx",
+      "label": "Alphabet xStock",
       "environment": "mainnet",
       "category": "token",
-      "address": "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
+      "address": "0xe92f673Ca36C5E2Efd2DE7628f815f84807e803F",
       "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["Merchant Moe"],
+      "aliases": ["GOOGLX"],
       "source": {
-        "url": "https://docs.merchantmoe.com",
+        "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
-      "key": "GHO",
-      "label": "GHO",
+      "key": "NVDAx",
+      "label": "NVIDIA xStock",
       "environment": "mainnet",
       "category": "token",
-      "address": "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73",
+      "address": "0xc845b2894dBddd03858fd2D643B4eF725fE0849d",
       "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["Gho Token"],
+      "aliases": ["NVDAX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "QQQx",
+      "label": "Nasdaq xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xa753A7395cAe905Cd615Da0B82A53E0560f250af",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["QQQX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "AAPLx",
+      "label": "Apple xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x9d275685dC284C8eB1C79f6ABA7a63Dc75ec890a",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["AAPLX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "SPYx",
+      "label": "S&P 500 xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["SPYX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MSTRx",
+      "label": "MicroStrategy xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xAE2f842EF90C0d5213259Ab82639D5BBF649b08E",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["MSTRX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+
+    {
+      "key": "wMETAx",
+      "label": "Wrapped Meta xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x4E41a262cAA93C6575d336E0a4eb79f3c67caa06",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WMETAX"],
       "source": {
         "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
@@ -234,15 +296,15 @@
       }
     },
     {
-      "key": "wAAPLx",
-      "label": "Wrapped Apple xStock",
+      "key": "wGOOGLx",
+      "label": "Wrapped Alphabet xStock",
       "environment": "mainnet",
       "category": "token",
-      "address": "0x5AA7649fdbDa47De64A07aC81D64B682AF9C0724",
+      "address": "0x1630F08370917E79df0B7572395a5e907508bBBc",
       "decimals": 18,
       "status": "active",
       "is_official": true,
-      "aliases": ["WAAPLX"],
+      "aliases": ["WGOOGLX"],
       "source": {
         "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
@@ -264,36 +326,6 @@
       }
     },
     {
-      "key": "wGOOGLx",
-      "label": "Wrapped Alphabet xStock",
-      "environment": "mainnet",
-      "category": "token",
-      "address": "0x1630F08370917E79df0B7572395a5e907508bBBc",
-      "decimals": 18,
-      "status": "active",
-      "is_official": true,
-      "aliases": ["WGOOGLX"],
-      "source": {
-        "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-18T00:00:00Z"
-      }
-    },
-    {
-      "key": "wMETAx",
-      "label": "Wrapped Meta xStock",
-      "environment": "mainnet",
-      "category": "token",
-      "address": "0x4E41a262cAA93C6575d336E0a4eb79f3c67caa06",
-      "decimals": 18,
-      "status": "active",
-      "is_official": true,
-      "aliases": ["WMETAX"],
-      "source": {
-        "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-18T00:00:00Z"
-      }
-    },
-    {
       "key": "wQQQx",
       "label": "Wrapped Nasdaq xStock",
       "environment": "mainnet",
@@ -303,6 +335,21 @@
       "status": "active",
       "is_official": true,
       "aliases": ["WQQQX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wAAPLx",
+      "label": "Wrapped Apple xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x5AA7649fdbDa47De64A07aC81D64B682AF9C0724",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WAAPLX"],
       "source": {
         "url": "https://token-list.mantle.xyz",
         "retrieved_at": "2026-04-18T00:00:00Z"
@@ -338,36 +385,7 @@
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
-    {
-      "key": "wHOODx",
-      "label": "Wrapped Robinhood xStock",
-      "environment": "mainnet",
-      "category": "token",
-      "address": "0x953707d7A1cB30cc5C636bDA8EaeBe410341eB14",
-      "decimals": 18,
-      "status": "active",
-      "is_official": true,
-      "aliases": ["WHOODX"],
-      "source": {
-        "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-18T00:00:00Z"
-      }
-    },
-    {
-      "key": "wCRCLx",
-      "label": "Wrapped Circle xStock",
-      "environment": "mainnet",
-      "category": "token",
-      "address": "0xA90872ACa656eBE47bDEBF3B19Ec9Dd9C5ADC7f8",
-      "decimals": 18,
-      "status": "active",
-      "is_official": true,
-      "aliases": ["WCRCLX"],
-      "source": {
-        "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-18T00:00:00Z"
-      }
-    },
+
     {
       "key": "BSB",
       "label": "Block Street",
@@ -428,20 +446,7 @@
         "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
-    {
-      "key": "AGNI_ROUTER",
-      "label": "Agni Router",
-      "environment": "mainnet",
-      "category": "defi",
-      "address": "0x319B69888b0d11cEC22caA5034e25FfFBDc88421",
-      "status": "active",
-      "is_official": true,
-      "aliases": ["Agni Swap Router"],
-      "source": {
-        "url": "https://agni.finance",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
+
     {
       "key": "MERCHANT_MOE_ROUTER",
       "label": "Merchant Moe MoeRouter (V1 swap)",
@@ -453,7 +458,7 @@
       "aliases": ["Merchant Moe Router", "MoeRouter"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -467,9 +472,208 @@
       "aliases": ["LB Router", "Liquidity Book Router"],
       "source": {
         "url": "https://docs.merchantmoe.com/resources/contracts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
+    {
+      "key": "MERCHANT_MOE_LFJ_AGGREGATOR",
+      "label": "Merchant Moe LFJ Aggregator",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x45A62B090DF48243F12A21897e7ed91863E2c86b",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["LFJ Aggregator"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_LB_FACTORY",
+      "label": "Merchant Moe LB Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xa6630671775c4EA2743840F9A5016dCf2A104054",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["LB Factory"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_FACTORY",
+      "label": "Merchant Moe V1 Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x5bEf015CA9424A7C07B68490616a4C1F094BEdEc",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["MoeFactory"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_MASTERCHEF",
+      "label": "Merchant Moe MasterChef",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xd4BD5e47548D8A6ba2a0Bf4cE073Cbf8fa523DcC",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["MasterChef"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MERCHANT_MOE_STAKING",
+      "label": "Merchant Moe Staking",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xE92249760e1443FbBeA45B03f607Ba84471Fa793",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["MoeStaking"],
+      "source": {
+        "url": "https://docs.merchantmoe.com/resources/contracts",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+
+    {
+      "key": "AGNI_ROUTER",
+      "label": "Agni SwapRouter",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x319B69888b0d11cEC22caA5034e25FfFBDc88421",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Agni Swap Router"],
+      "source": {
+        "url": "https://agni.finance",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "AGNI_POSITION_MANAGER",
+      "label": "Agni Position Manager",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x218bf598D1453383e2F4AA7b14fFB9BfB102D637",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Agni Nonfungible Position Manager"],
+      "source": {
+        "url": "https://agni.finance",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "AGNI_FACTORY",
+      "label": "Agni V3 Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["AgniFactory"],
+      "source": {
+        "url": "https://agni.finance",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "AGNI_SMART_ROUTER",
+      "label": "Agni Smart Router",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xB52B1f5e08c04a8C33f4c7363fa2De23b9Bc169F",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Agni SmartRouter"],
+      "source": {
+        "url": "https://agni.finance",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+
+    {
+      "key": "FLUXION_SWAP_ROUTER",
+      "label": "Fluxion V3 SwapRouter",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x5628a59dF0ECAC3f3171f877A94bEb26BA6DFAa0",
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Fluxion Router", "Fluxion V3 Router"],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_POSITION_MANAGER",
+      "label": "Fluxion V3 Position Manager",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x2b70C4e7cA8E920435A5dB191e066E9E3AFd8DB3",
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_V3_FACTORY",
+      "label": "Fluxion V3 Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xf883162Ed9C7E8ef604214C964C678e40C9B737C",
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_V2_ROUTER",
+      "label": "Fluxion V2 Router",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0xD772E655Af24fE5af92504d613D1Da0D9CFB6408",
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "FLUXION_V2_POOL_FACTORY",
+      "label": "Fluxion V2 Pool Factory",
+      "environment": "mainnet",
+      "category": "defi",
+      "address": "0x9336B143C572D75f1F2B7374532E8C96EED41fE9",
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+
     {
       "key": "AAVE_V3_POOL",
       "label": "Aave V3 Pool",
@@ -481,35 +685,7 @@
       "aliases": ["Aave Pool"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
-    {
-      "key": "AAVE_V3_POOL_DATA_PROVIDER",
-      "label": "Aave V3 Pool Data Provider",
-      "environment": "mainnet",
-      "category": "defi",
-      "address": "0x487c5c669D9eee6057C44973207101276cf73b68",
-      "status": "active",
-      "is_official": true,
-      "aliases": ["Aave Data Provider"],
-      "source": {
-        "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
-    {
-      "key": "AAVE_V3_POOL_ADDRESSES_PROVIDER",
-      "label": "Aave V3 Pool Addresses Provider",
-      "environment": "mainnet",
-      "category": "defi",
-      "address": "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f",
-      "status": "active",
-      "is_official": true,
-      "aliases": ["Aave Addresses Provider"],
-      "source": {
-        "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -523,65 +699,24 @@
       "aliases": ["Aave WETHGateway"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
-      "key": "AAVE_V3_ORACLE",
-      "label": "Aave V3 Price Oracle",
+      "key": "AAVE_V3_POOL_DATA_PROVIDER",
+      "label": "Aave V3 Pool Data Provider",
       "environment": "mainnet",
       "category": "defi",
-      "address": "0x47a063CfDa980532267970d478EC340C0F80E8df",
+      "address": "0x487c5c669D9eee6057C44973207101276cf73b68",
       "status": "active",
       "is_official": true,
-      "aliases": ["Aave Oracle"],
+      "aliases": ["Aave Data Provider"],
       "source": {
         "url": "https://github.com/bgd-labs/aave-address-book/blob/main/src/ts/AaveV3Mantle.ts",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
-    {
-      "key": "FLUXION_SWAP_ROUTER",
-      "label": "Fluxion Swap Router",
-      "environment": "mainnet",
-      "category": "defi",
-      "address": "0x5628a59dF0ECAC3f3171f877A94bEb26BA6DFAa0",
-      "status": "active",
-      "is_official": true,
-      "aliases": ["Fluxion Router"],
-      "source": {
-        "url": "https://app.fluxion.network",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
-    {
-      "key": "FLUXION_POSITION_MANAGER",
-      "label": "Fluxion Position Manager",
-      "environment": "mainnet",
-      "category": "defi",
-      "address": "0x2b70C4e7cA8E920435A5dB191e066E9E3AFd8DB3",
-      "status": "active",
-      "is_official": true,
-      "aliases": [],
-      "source": {
-        "url": "https://app.fluxion.network",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
-    {
-      "key": "MANTLE_L2_STANDARD_BRIDGE",
-      "label": "Mantle L2 Standard Bridge",
-      "environment": "mainnet",
-      "category": "bridge",
-      "address": "0x4200000000000000000000000000000000000010",
-      "status": "active",
-      "is_official": true,
-      "aliases": ["Standard Bridge L2"],
-      "source": {
-        "url": "https://docs.mantle.xyz/network/system-information/off-chain-system/key-l2-contract-address",
-        "retrieved_at": "2026-04-15T00:00:00Z"
-      }
-    },
+
     {
       "key": "WMNT",
       "label": "Wrapped Mantle",

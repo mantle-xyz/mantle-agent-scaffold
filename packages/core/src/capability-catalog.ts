@@ -171,7 +171,7 @@ const CAPABILITIES: CapabilityEntry[] = [
     auth: "none",
     summary: "Resolve a token symbol to its address and metadata via quick-reference + token-list cross-check.",
     cli_command: "mantle-cli token resolve <symbol> --json",
-    example: "{ \"symbol\": \"mETH\" }",
+    example: "{ \"symbol\": \"cmETH\" }",
     tags: ["token", "resolve", "address"]
   },
 

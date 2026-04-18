@@ -43,25 +43,25 @@ export function registerAccount(parent: Command): void {
     .argument("<address>", "wallet address")
     .option(
       "--tokens <tokens>",
-      "comma-separated token symbols or addresses — e.g. 'WMNT,WETH,USDC,USDT,USDT0,mETH,cmETH,FBTC,MOE'. Omit to use the curated default whitelist (see `--help` for the full list)."
+      "comma-separated token symbols or addresses — e.g. 'WMNT,WETH,USDC,USDT,USDT0,cmETH,FBTC,MOE'. Omit to use the curated default whitelist (see `--help` for the full list)."
     )
     .addHelpText(
       "after",
       [
         "",
-        "Recommended token symbols (Mantle mainnet):",
-        "  Majors & stables   WMNT, WETH, USDC, USDT, USDT0",
-        "  Yield stables      USDe, sUSDe, GHO, syrupUSDT",
-        "  LSTs / restaking   mETH, cmETH, wrsETH",
+        "Recommended token symbols (Mantle mainnet; OpenClaw × Mantle whitelist):",
+        "  Majors & stables   WMNT, WETH, USDC, USDT, USDT0, USDe",
+        "  LSTs / restaking   cmETH",
         "  BTC-backed         FBTC",
         "  Ecosystem / DEX    MOE",
-        "  xStocks (RWA) / Fluxion      wTSLAx, wAAPLx, wNVDAx, wGOOGLx, wMETAx,",
-        "                     wQQQx, wSPYx, wMSTRx, wHOODx, wCRCLx",
-        "  MEME / Fluxion   BSB, ELSA, VOOI, SCOR",
+        "  xStocks (RWA) unwrapped   METAx, TSLAx, GOOGLx, NVDAx, QQQx, AAPLx, SPYx, MSTRx",
+        "  xStocks (RWA) wrapped     wMETAx, wTSLAx, wGOOGLx, wNVDAx, wQQQx, wAAPLx, wSPYx, wMSTRx",
+        "  Community / Fluxion       BSB, ELSA, VOOI, SCOR",
         "",
         "Notes:",
         "  - Native MNT is NOT an ERC-20 — use `mantle-cli account balance <address>` instead.",
-        "  - Symbols are resolved against the built-in token registry; any ERC-20 address works too.",
+        "  - Symbols are resolved against the built-in token registry (registry.json).",
+        "  - Only whitelisted tokens are surfaced here. Non-whitelist tokens (e.g. mETH, sUSDe, GHO, wrsETH, syrupUSDT) are intentionally excluded per the OpenClaw × Mantle hard constraint.",
         "  - Sepolia testnet currently only resolves WMNT by symbol.",
         ""
       ].join("\n")

@@ -7,8 +7,23 @@ export interface TokenEntry {
   symbol: string;
 }
 
+/**
+ * Mantle token registry — strictly scoped to the OpenClaw / RealClaw whitelist.
+ *
+ * Authoritative source:
+ *   skills/mantle-openclaw-competition/references/asset-whitelist.md
+ *
+ * Hard Constraint #10: any token not present here must be refused before a
+ * CLI call is made — even if the user insists, accepts risk, or asks to
+ * "just try". Do not silently substitute a similar asset (e.g. "stETH" ->
+ * cmETH); refuse and cite the whitelist.
+ *
+ * MNT is the native gas token; it has no ERC-20 contract. Use WMNT
+ * (`swap wrap-mnt` / `swap unwrap-mnt`) for any ERC-20 interaction.
+ */
 export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
   mainnet: {
+    // ---- Core assets (9; MNT is native, no contract) ----
     MNT: { address: "native", decimals: 18, name: "Mantle", symbol: "MNT" },
     WMNT: {
       address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
@@ -46,18 +61,6 @@ export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
       name: "USDe",
       symbol: "USDe"
     },
-    sUSDe: {
-      address: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
-      decimals: 18,
-      name: "Staked USDe",
-      symbol: "sUSDe"
-    },
-    mETH: {
-      address: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
-      decimals: 18,
-      name: "Mantle Staked ETH",
-      symbol: "mETH"
-    },
     cmETH: {
       address: "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA",
       decimals: 18,
@@ -76,86 +79,108 @@ export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
       name: "FBTC",
       symbol: "FBTC"
     },
-    syrupUSDT: {
-      address: "0x051665f2455116e929b9972c36d23070F5054Ce0",
-      decimals: 6,
-      name: "Syrup USDT",
-      symbol: "syrupUSDT"
-    },
-    wrsETH: {
-      address: "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74",
-      decimals: 18,
-      name: "Wrapped rsETH",
-      symbol: "wrsETH"
-    },
-    GHO: {
-      address: "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73",
-      decimals: 18,
-      name: "GHO",
-      symbol: "GHO"
-    },
-    // xStocks RWA tokens (all 18 decimals)
-    wTSLAx: {
-      address: "0x43680abf18cf54898be84c6ef78237cfbd441883",
-      decimals: 18,
-      name: "Tesla xStock",
-      symbol: "wTSLAx"
-    },
-    wAAPLx: {
-      address: "0x5aa7649fdbda47de64a07ac81d64b682af9c0724",
-      decimals: 18,
-      name: "Apple xStock",
-      symbol: "wAAPLx"
-    },
-    wNVDAx: {
-      address: "0x93e62845c1dd5822ebc807ab71a5fb750decd15a",
-      decimals: 18,
-      name: "Nvidia xStock",
-      symbol: "wNVDAx"
-    },
-    wGOOGLx: {
-      address: "0x1630f08370917e79df0b7572395a5e907508bbbc",
-      decimals: 18,
-      name: "Alphabet xStock",
-      symbol: "wGOOGLx"
-    },
-    wMETAx: {
-      address: "0x4e41a262caa93c6575d336e0a4eb79f3c67caa06",
+
+    // ---- xStocks unwrapped (8). Fluxion-only, USDC pair, fee_tier=3000 ----
+    METAx: {
+      address: "0x96702be57Cd9777f835117a809C7124fe4ec989A",
       decimals: 18,
       name: "Meta xStock",
-      symbol: "wMETAx"
+      symbol: "METAx"
     },
-    wQQQx: {
-      address: "0xdbd9232fee15351068fe02f0683146e16d9f2cea",
+    TSLAx: {
+      address: "0x8aD3c73F833d3F9A523aB01476625F269aEB7Cf0",
+      decimals: 18,
+      name: "Tesla xStock",
+      symbol: "TSLAx"
+    },
+    GOOGLx: {
+      address: "0xe92f673Ca36C5E2Efd2DE7628f815f84807e803F",
+      decimals: 18,
+      name: "Alphabet xStock",
+      symbol: "GOOGLx"
+    },
+    NVDAx: {
+      address: "0xc845b2894dBddd03858fd2D643B4eF725fE0849d",
+      decimals: 18,
+      name: "NVIDIA xStock",
+      symbol: "NVDAx"
+    },
+    QQQx: {
+      address: "0xa753A7395cAe905Cd615Da0B82A53E0560f250af",
       decimals: 18,
       name: "Nasdaq xStock",
-      symbol: "wQQQx"
+      symbol: "QQQx"
     },
-    wSPYx: {
-      address: "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02",
+    AAPLx: {
+      address: "0x9d275685dC284C8eB1C79f6ABA7a63Dc75ec890a",
+      decimals: 18,
+      name: "Apple xStock",
+      symbol: "AAPLx"
+    },
+    SPYx: {
+      address: "0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48",
       decimals: 18,
       name: "S&P 500 xStock",
+      symbol: "SPYx"
+    },
+    MSTRx: {
+      address: "0xAE2f842EF90C0d5213259Ab82639D5BBF649b08E",
+      decimals: 18,
+      name: "MicroStrategy xStock",
+      symbol: "MSTRx"
+    },
+
+    // ---- xStocks wrapped (8). CLI symbol = w<TICKER>x ----
+    wMETAx: {
+      address: "0x4E41a262cAA93C6575d336E0a4eb79f3c67caa06",
+      decimals: 18,
+      name: "Wrapped Meta xStock",
+      symbol: "wMETAx"
+    },
+    wTSLAx: {
+      address: "0x43680aBF18cf54898Be84C6eF78237CFBD441883",
+      decimals: 18,
+      name: "Wrapped Tesla xStock",
+      symbol: "wTSLAx"
+    },
+    wGOOGLx: {
+      address: "0x1630F08370917E79df0B7572395a5e907508bBBc",
+      decimals: 18,
+      name: "Wrapped Alphabet xStock",
+      symbol: "wGOOGLx"
+    },
+    wNVDAx: {
+      address: "0x93E62845C1DD5822EbC807ab71A5Fb750DecD15A",
+      decimals: 18,
+      name: "Wrapped NVIDIA xStock",
+      symbol: "wNVDAx"
+    },
+    wQQQx: {
+      address: "0xdbD9232fee15351068Fe02F0683146e16D9f2cEa",
+      decimals: 18,
+      name: "Wrapped Nasdaq xStock",
+      symbol: "wQQQx"
+    },
+    wAAPLx: {
+      address: "0x5AA7649fdbDa47De64A07aC81D64B682AF9C0724",
+      decimals: 18,
+      name: "Wrapped Apple xStock",
+      symbol: "wAAPLx"
+    },
+    wSPYx: {
+      address: "0xc88FcD8B874fDb3256E8B55b3decB8c24EAb4c02",
+      decimals: 18,
+      name: "Wrapped S&P 500 xStock",
       symbol: "wSPYx"
     },
     wMSTRx: {
-      address: "0x266e5923f6118f8b340ca5a23ae7f71897361476",
+      address: "0x266E5923F6118F8b340cA5a23AE7f71897361476",
       decimals: 18,
-      name: "MicroStrategy xStock",
+      name: "Wrapped MicroStrategy xStock",
       symbol: "wMSTRx"
     },
-    wHOODx: {
-      address: "0x953707d7a1cb30cc5c636bda8eaebe410341eb14",
-      decimals: 18,
-      name: "Robinhood xStock",
-      symbol: "wHOODx"
-    },
-    wCRCLx: {
-      address: "0xa90872aca656ebe47bdebf3b19ec9dd9c5adc7f8",
-      decimals: 18,
-      name: "Circle xStock",
-      symbol: "wCRCLx"
-    },
-    // Fluxion ecosystem tokens
+
+    // ---- Community tokens (4). Fluxion-only, typically USDT0-paired ----
     BSB: {
       address: "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95",
       decimals: 18,
@@ -192,9 +217,48 @@ export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Whitelist helpers — used by defi-write tools to enforce Hard Constraint #10
+// on token addresses. Complements `isWhitelistedContract` in protocols.ts
+// which enforces the same rule on *contract* targets.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lowercase set of whitelisted ERC-20 addresses per network, lazily built from
+ * MANTLE_TOKENS. We exclude the native MNT entry (address === "native")
+ * because it has no ERC-20 contract.
+ */
+const WHITELISTED_TOKEN_ADDRESSES: Record<Network, Set<string>> = (() => {
+  const build = (network: Network) =>
+    new Set(
+      Object.values(MANTLE_TOKENS[network])
+        .map((t) => t.address)
+        .filter((a) => a !== "native")
+        .map((a) => a.toLowerCase())
+    );
+  return { mainnet: build("mainnet"), sepolia: build("sepolia") };
+})();
+
+/**
+ * Return true if the given ERC-20 address is on the OpenClaw × Mantle token
+ * whitelist for this network. Accepts any case — the comparison is lowercase.
+ *
+ * Non-mainnet networks (sepolia) intentionally use the same check; the
+ * sepolia whitelist only contains WMNT, so anything else will be refused
+ * before a sepolia tx can be built. Raw-address callers never bypass
+ * whitelist enforcement regardless of network.
+ */
+export function isWhitelistedTokenAddress(
+  address: string,
+  network: Network
+): boolean {
+  if (!address || address === "native") return false;
+  return WHITELISTED_TOKEN_ADDRESSES[network].has(address.toLowerCase());
+}
+
 /**
  * Default token whitelist used by portfolio / balance scans when the caller
- * does not explicitly enumerate tokens. Covers the most-held ERC-20s on
+ * does not explicitly enumerate tokens. Covers every whitelisted ERC-20 on
  * Mantle so `mantle-cli account token-balances <address>` returns a useful
  * answer out-of-the-box.
  *
@@ -213,15 +277,23 @@ export const PORTFOLIO_DEFAULT_TOKENS: Record<Network, readonly string[]> = {
     "USDC",
     "USDT",
     "USDT0",
+    "USDe",
     // LSTs / restaking
     "cmETH",
     // Ecosystem governance / DEX
     "MOE",
-    // Yield / RWA stables
-    "USDe",
     // BTC-backed
     "FBTC",
-    // xStocks (RWA equities)
+    // xStocks unwrapped (RWA equities)
+    "METAx",
+    "TSLAx",
+    "GOOGLx",
+    "NVDAx",
+    "QQQx",
+    "AAPLx",
+    "SPYx",
+    "MSTRx",
+    // xStocks wrapped
     "wMETAx",
     "wTSLAx",
     "wGOOGLx",
@@ -230,7 +302,7 @@ export const PORTFOLIO_DEFAULT_TOKENS: Record<Network, readonly string[]> = {
     "wAAPLx",
     "wSPYx",
     "wMSTRx",
-    // Fluxion ecosystem
+    // Community / Fluxion ecosystem
     "BSB",
     "ELSA",
     "VOOI",
