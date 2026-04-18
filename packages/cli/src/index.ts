@@ -18,6 +18,7 @@ import { registerIndexer } from "./commands/indexer.js";
 import { registerDiagnostics } from "./commands/diagnostics.js";
 import { registerCatalog } from "./commands/catalog.js";
 import { registerUtils } from "./commands/utils.js";
+import { registerWhitelist } from "./commands/whitelist.js";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
@@ -60,6 +61,7 @@ registerIndexer(program);
 registerDiagnostics(program);
 registerCatalog(program);
 registerUtils(program);
+registerWhitelist(program);
 
 program.parseAsync(process.argv).catch((error) => {
   const globals = program.opts();

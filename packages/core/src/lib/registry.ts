@@ -22,10 +22,18 @@ export interface RegistryEntry {
   };
 }
 
-interface RegistryJson {
+export interface RegistryJson {
   schema_version: string;
   network: string;
   updated_at: string;
+  /** Free-form description of the registry's policy and authoritative source. */
+  notes?: string;
+  /** Chain IDs for each environment declared in the registry. */
+  chain_ids?: {
+    mainnet?: number;
+    testnet?: number;
+    [environment: string]: number | undefined;
+  };
   contracts: RegistryEntry[];
 }
 
