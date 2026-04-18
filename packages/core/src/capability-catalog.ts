@@ -263,6 +263,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     mutates: false,
     auth: "required",
     summary: "Read a wallet's Aave V3 positions: supplied collateral (aTokens), borrowed debt (debtTokens), health factor, liquidation threshold, and per-reserve breakdowns. IMPORTANT: tokens supplied to Aave do NOT appear in mantle_getTokenBalances (they are held as aTokens inside the Aave pool) — always call this when checking a wallet's full balance or portfolio.",
+    // Note: query tools use --user (any address to inspect). Mutating Aave
+    // tools (buildAaveSupply/Borrow/Repay/Withdraw/SetCollateral) use --owner
+    // (the signing wallet) because `owner` is what gas/fee/nonce gets pinned
+    // against. Do not "unify" these — they mean different things.
     cli_command: "mantle-cli aave positions --user <address> --json",
     example: "{ \"user\": \"0x1234...\" }",
     workflow_before: ["mantle_buildAaveSupply", "mantle_buildAaveBorrow"],
@@ -472,8 +476,8 @@ const CAPABILITIES: CapabilityEntry[] = [
     mutates: true,
     auth: "required",
     summary: "Build unsigned Aave V3 withdraw tx. Use --amount max for full balance.",
-    cli_command: "mantle-cli aave withdraw --asset <token> --amount <n|max> --to <addr> --json",
-    example: "{ \"asset\": \"USDC\", \"amount\": \"50\", \"to\": \"0x1234...\" }",
+    cli_command: "mantle-cli aave withdraw --asset <token> --amount <n|max> --to <addr> --owner <addr> --json",
+    example: "{ \"asset\": \"USDC\", \"amount\": \"50\", \"to\": \"0x1234...\", \"owner\": \"0x1234...\" }",
     tags: ["Aave", "withdraw", "lending", "tx"]
   },
   {
@@ -482,9 +486,9 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "execute",
     mutates: true,
     auth: "required",
-    summary: "Build unsigned Aave V3 tx to enable/disable a supplied asset as collateral (operates on msg.sender). Runs preflight diagnostics when user is provided: checks aToken balance, reserve LTV/active/frozen, and per-reserve collateral bitmap.",
-    cli_command: "mantle-cli aave set-collateral --asset <token> [--user <addr>] [--disable] --json",
-    example: "{ \"asset\": \"WMNT\", \"user\": \"0x1234...\" }",
+    summary: "Build unsigned Aave V3 tx to enable/disable a supplied asset as collateral (operates on msg.sender). Runs preflight diagnostics when owner is provided: checks aToken balance, reserve LTV/active/frozen, and per-reserve collateral bitmap.",
+    cli_command: "mantle-cli aave set-collateral --asset <token> --owner <addr> [--disable] --json",
+    example: "{ \"asset\": \"WMNT\", \"owner\": \"0x1234...\" }",
     workflow_before: ["mantle_buildAaveBorrow"],
     tags: ["Aave", "collateral", "lending", "tx", "diagnostics"]
   },

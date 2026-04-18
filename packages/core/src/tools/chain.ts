@@ -4,6 +4,7 @@ import { CHAIN_CONFIGS } from "../config/chains.js";
 import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
 import { normalizeNetwork } from "../lib/network.js";
+import { decodeRevertFromError, revertInfoToDetails } from "../lib/revert-decoder.js";
 import type { Tool } from "../types.js";
 
 interface ChainStatusClient {
@@ -220,12 +221,21 @@ export async function estimateGas(args: Record<string, unknown>): Promise<any> {
     };
   } catch (error) {
     if (error instanceof MantleMcpError) throw error;
+    const revertInfo = decodeRevertFromError(error);
+    const revertDetails = revertInfoToDetails(revertInfo);
+    const baseMessage = `Gas estimation failed: ${error instanceof Error ? error.message : String(error)}`;
+    const enrichedMessage = revertInfo?.message
+      ? `${baseMessage} [revert: ${revertInfo.message}]`
+      : baseMessage;
     throw new MantleMcpError(
       "GAS_ESTIMATION_FAILED",
-      `Gas estimation failed: ${error instanceof Error ? error.message : String(error)}`,
-      "The transaction may revert on-chain. Check that the calldata and target are correct, " +
-        "and that the sender has sufficient balance. Provide --from for context-aware estimation.",
-      { to, from: from ?? null, network }
+      enrichedMessage,
+      "The transaction may revert on-chain. Inspect `revert_raw` (always set when the call " +
+        "reverted, even as `0x`) and `revert_selector` (the 4-byte custom error id, set when " +
+        "the revert returned ≥4 bytes) in details. `revert_message` decodes Error(string) and " +
+        "Panic(uint256) automatically; custom errors outside that set are surfaced raw. Provide " +
+        "--from for context-aware estimation.",
+      { to, from: from ?? null, network, ...revertDetails }
     );
   }
 }

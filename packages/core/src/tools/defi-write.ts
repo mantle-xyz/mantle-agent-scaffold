@@ -20,6 +20,7 @@ import { MantleMcpError } from "../errors.js";
 import { getPublicClient } from "../lib/clients.js";
 import { ERC20_ABI } from "../lib/abis/erc20.js";
 import { normalizeNetwork } from "../lib/network.js";
+import { decodeRevertFromError, revertInfoToDetails } from "../lib/revert-decoder.js";
 import {
   resolveTokenInput as resolveTokenInputFromRegistry,
   type ResolvedTokenInput
@@ -840,15 +841,31 @@ function wrapBuildHandler(
         } catch (err) {
           // Only estimateGas / getBlock failures reach here — the nonce
           // fetch is captured into its own sentinel and cannot throw.
+          //
+          // When the revert was on-chain (vs. RPC down), viem nests the
+          // raw revert bytes somewhere in the cause chain. Pull them out
+          // and attach the selector + decoded message so callers can
+          // diagnose the revert without falling back to raw curl or
+          // fabricated selector tables.
+          const revertInfo = decodeRevertFromError(err);
+          const revertDetails = revertInfoToDetails(revertInfo);
+          const baseMessage = `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`;
+          const enrichedMessage = revertInfo?.message
+            ? `${baseMessage} [revert: ${revertInfo.message}]`
+            : baseMessage;
           throw new MantleMcpError(
             "GAS_ESTIMATION_FAILED",
-            `Gas estimation failed: ${err instanceof Error ? err.message : String(err)}`,
-            "The transaction may revert on-chain. Check that the sender has sufficient balance " +
-              "and that the calldata/target are correct. Do NOT submit without a valid gas estimate.",
+            enrichedMessage,
+            "The transaction may revert on-chain. `revert_raw` is always set when the call " +
+              "reverted (even as `0x`); `revert_selector` is the 4-byte custom error id, set " +
+              "when the revert returned ≥4 bytes. `revert_message` decodes Error(string) and " +
+              "Panic(uint256) automatically; custom errors outside that set are surfaced raw so " +
+              "you can look them up externally. Do NOT submit without a valid gas estimate.",
             {
               to: result.unsigned_tx.to,
               sender: sender ?? null,
               intent: result.intent ?? null,
+              ...revertDetails,
             }
           );
         }
@@ -5324,8 +5341,8 @@ export const defiWriteTools: Record<string, Tool> = {
     description:
       "Build an unsigned Aave V3 transaction to enable or disable a supplied asset as collateral.\n\n" +
       "MSG.SENDER: This transaction operates on the SIGNING WALLET (msg.sender), not an " +
-      "arbitrary address. The user param is only used for preflight diagnostics.\n\n" +
-      "DIAGNOSTICS: When user is provided, runs on-chain checks before building the tx:\n" +
+      "arbitrary address. The owner param is only used for preflight diagnostics.\n\n" +
+      "DIAGNOSTICS: When owner is provided, runs on-chain checks before building the tx:\n" +
       "- Verifies aToken balance > 0 (user has actually supplied)\n" +
       "- Checks reserve config (LTV > 0, active, not frozen)\n" +
       "- Reads user config bitmap to detect if collateral is already enabled/disabled\n" +
