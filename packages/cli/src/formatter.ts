@@ -58,7 +58,12 @@ export interface TableColumn {
   key: string;
   label: string;
   align?: "left" | "right";
-  format?: (value: unknown) => string;
+  /**
+   * Render a cell. The second argument is the full row so a formatter can
+   * cross-reference sibling fields (e.g. render a value differently based on
+   * a unit discriminator in another column).
+   */
+  format?: (value: unknown, row?: Record<string, unknown>) => string;
 }
 
 export function formatTable(rows: Record<string, unknown>[], columns: TableColumn[]): void {
@@ -71,7 +76,7 @@ export function formatTable(rows: Record<string, unknown>[], columns: TableColum
     const headerWidth = col.label.length;
     const maxDataWidth = Math.max(
       ...rows.map((row) => {
-        const formatted = col.format ? col.format(row[col.key]) : formatValue(row[col.key]);
+        const formatted = col.format ? col.format(row[col.key], row) : formatValue(row[col.key]);
         return stripAnsi(formatted).length;
       }),
       0
@@ -87,7 +92,7 @@ export function formatTable(rows: Record<string, unknown>[], columns: TableColum
   for (const row of rows) {
     const line = columns
       .map((col, i) => {
-        const raw = col.format ? col.format(row[col.key]) : formatValue(row[col.key]);
+        const raw = col.format ? col.format(row[col.key], row) : formatValue(row[col.key]);
         const stripped = stripAnsi(raw);
         const padding = widths[i] - stripped.length;
         if (col.align === "right") {

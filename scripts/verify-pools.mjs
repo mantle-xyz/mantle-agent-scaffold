@@ -7,6 +7,10 @@
  *   2. pool token 组成  — 链上 token0/token1 (或 getTokenX/getTokenY) 是否匹配
  *   3. 地址 checksum    — EIP-55 格式校验（仅警告，不影响功能）
  *
+ * 相关脚本:
+ *   scripts/refresh-pools.mjs — 从 DexScreener 拉取 + 链上核验 + 重建 JSON。
+ *                               本脚本则是独立的只读复核，用于日常巡检。
+ *
  * 用法:
  *   node scripts/verify-pools.mjs              # 只检查，不修改
  *   node scripts/verify-pools.mjs --fix        # 检查 + 自动修复 checksum 大小写

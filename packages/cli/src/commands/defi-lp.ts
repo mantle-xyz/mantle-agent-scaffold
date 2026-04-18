@@ -722,19 +722,32 @@ export function registerLp(parent: Command): void {
             key: "liquidity_raw",
             label: "Liquidity",
             align: "right",
-            format: (v: unknown) => {
-              const n = BigInt(v as string);
+            format: (v: unknown, row?: Record<string, unknown>) => {
+              const raw = String(v ?? "0");
+              const unit = row?.liquidity_unit;
+              // New zero-RPC discovery path — raw is an integer USD value
+              // (floored), display as "$N" with thousands separator.
+              if (unit === "dexscreener_usd_snapshot") {
+                const n = Number(raw);
+                if (!Number.isFinite(n) || n <= 0) return "-";
+                return "$" + n.toLocaleString("en-US");
+              }
+              // Legacy paths — raw is a uint128 from pool.liquidity() or a
+              // mixed-decimal LB reserve sum. Keep the old rough display.
+              const n = BigInt(raw);
               if (n === 0n) return "-";
               if (n > 10n ** 18n) return (Number(n / (10n ** 12n)) / 1e6).toFixed(1) + "T";
               return n.toString();
             }
           },
           {
-            // Discriminant so "Liquidity" values are not visually comparable across
-            // providers (V3 virtual-L vs LB mixed-decimal reserves are not the same unit).
+            // Discriminant so "Liquidity" values are not visually comparable
+            // across providers when the legacy on-chain paths were used.
+            // New "dexscreener_usd_snapshot" entries ARE comparable (all USD).
             key: "liquidity_unit",
             label: "Unit",
             format: (v: unknown) => {
+              if (v === "dexscreener_usd_snapshot") return "usd";
               if (v === "v3_virtual_liquidity") return "v3-L";
               if (v === "lb_active_bin_native_mixed") return "lb-bin-mixed";
               return v ? String(v) : "-";
