@@ -27,7 +27,13 @@ const program = new Command();
 
 program
   .name("mantle-cli")
-  .description("CLI for Mantle L2 chain reads, DeFi queries, swaps, LP, and Aave operations")
+  .description(
+    "CLI for Mantle L2. Covers chain reads, token transfers, DEX operations " +
+    "(swap / wrap / unwrap), liquidity provisioning (add liquidity, remove liquidity, " +
+    "manage LP positions, approve LB shares, collect fees, analyze pools), and " +
+    "Aave V3 lending (supply, borrow, repay, withdraw, set collateral). " +
+    "Every write command outputs an unsigned, deterministic transaction for an external signer."
+  )
   .version(pkg.version)
   .option("-n, --network <network>", "target network (mainnet, sepolia)", "mainnet")
   .option("--json", "output raw JSON", false)

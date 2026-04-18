@@ -6,25 +6,55 @@ import { parseIntegerOption, parseNumberOption, parseJsonArray, parseBigIntArray
 /**
  * Liquidity provision operations:
  *   lp add           — Build unsigned add-liquidity transaction
+ *                      (aliases: add-liquidity, provide, deposit, open)
  *   lp remove        — Build unsigned remove-liquidity transaction
+ *                      (aliases: remove-liquidity, withdraw, close, exit)
  *   lp approve-lb    — Build unsigned LB Pair operator approval (required before Moe remove)
- *   lp positions     — List V3 LP positions for an owner
+ *                      (aliases: approve-lb-shares, approve-moe-shares)
+ *   lp positions     — List LP positions for an owner (V3 + LB)
+ *                      (aliases: list, ls, my-positions)
  *   lp pool-state    — Read V3 pool on-chain state (tick, price, liquidity)
+ *                      (aliases: pool-info, pool)
  *   lp analyze       — Deep pool analysis (APR, risk, investment projections)
+ *                      (aliases: analyse, pool-analysis, apr)
  *   lp collect-fees  — Build unsigned fee collection transaction
+ *                      (aliases: collect, claim-fees, harvest)
  *   lp suggest-ticks — Suggest tick ranges for V3 LP
+ *                      (aliases: tick-ranges, suggest-range)
+ *   lp find-pools    — Discover pools for a token pair across DEXes
+ *                      (aliases: pools, discover-pools)
+ *
+ * Group aliases: `liquidity`, `pool` — so "mantle-cli liquidity add" also routes here.
+ *
+ * Rich descriptions + aliases exist to improve LLM / agent routing — the command
+ * descriptions include natural-language verbs (add/provide/deposit/open, remove/
+ * withdraw/close/exit, list/query/show, etc.) so that requests like "add liquidity",
+ * "provide LP", "open a position", "close my LP", "添加流动性" map unambiguously to
+ * the right subcommand via --help introspection.
  */
 export function registerLp(parent: Command): void {
   const group = parent
     .command("lp")
-    .description("Liquidity provision operations (build unsigned transactions)");
+    .aliases(["liquidity", "pool"])
+    .description(
+      "Liquidity provisioning (LP) on Mantle DEXes — use for any request that involves " +
+      "ADDING liquidity (provide / deposit / open a position), REMOVING liquidity " +
+      "(withdraw / close a position), listing LP positions, approving LB shares, " +
+      "collecting V3 fees, or analyzing / discovering pools. " +
+      "Supports Agni V3, Fluxion V3, and Merchant Moe (Liquidity Book). " +
+      "Subcommands: add, remove, approve-lb, positions, pool-state, find-pools, analyze, collect-fees, suggest-ticks. " +
+      "All write subcommands output unsigned, deterministic transactions for an external signer."
+    );
 
   // ── add ─────────────────────────────────────────────────────────────
   group
     .command("add")
+    .aliases(["add-liquidity", "provide", "deposit", "open"])
     .description(
-      "Build unsigned add-liquidity transaction. " +
-      "V3 (agni/fluxion) mints an NFT position; Merchant Moe LB adds to bins.\n" +
+      "Add / provide / deposit liquidity to a DEX pool. Use this for any " +
+      "\"add liquidity\", \"provide liquidity\", \"open an LP position\", or \"deposit into a pool\" request. " +
+      "Builds an unsigned transaction. " +
+      "V3 (agni/fluxion) mints an NFT position; Merchant Moe LB adds into bins.\n" +
       "Amount modes: provide --amount-a + --amount-b, OR --amount-usd for automatic sizing.\n" +
       "Range presets: --range-preset aggressive (±5%) | moderate (±10%) | conservative (±20%)."
     )
@@ -129,9 +159,12 @@ export function registerLp(parent: Command): void {
   // ── remove ──────────────────────────────────────────────────────────
   group
     .command("remove")
+    .aliases(["remove-liquidity", "withdraw", "close", "exit"])
     .description(
-      "Build unsigned remove-liquidity transaction. " +
-      "V3 uses decreaseLiquidity+collect; Merchant Moe LB removes from bins.\n" +
+      "Remove / withdraw / close liquidity from a DEX pool. Use this for any " +
+      "\"remove liquidity\", \"withdraw LP\", \"close position\", or \"exit pool\" request. " +
+      "Builds an unsigned transaction. " +
+      "V3 uses decreaseLiquidity+collect; Merchant Moe LB burns bin shares.\n" +
       "V3 amount modes: --liquidity (exact) or --percentage (1-100, reads position on-chain)."
     )
     .requiredOption("--provider <provider>", "DEX provider: agni, fluxion, or merchant_moe")
@@ -229,11 +262,13 @@ export function registerLp(parent: Command): void {
   // ── approve-lb ──────────────────────────────────────────────────────
   group
     .command("approve-lb")
+    .aliases(["approve-lb-shares", "approve-moe-shares"])
     .description(
-      "Build unsigned LB Pair operator approval (approveForAll). " +
-      "REQUIRED before 'lp remove' for merchant_moe: the router burns your LB shares " +
+      "Approve LB Pair operator (setApprovalForAll) for Merchant Moe LB shares. " +
+      "REQUIRED before 'lp remove' on merchant_moe: the router burns your LB shares " +
       "via LBPair.burn(user,...) and needs isApprovedForAll(user, router)=true. " +
-      "Resolve the pair directly via --pair, or via --token-a/--token-b/--bin-step (looked up through the LB Factory)."
+      "Resolve the pair directly via --pair, or via --token-a/--token-b/--bin-step (looked up through the LB Factory). " +
+      "Not needed for Agni/Fluxion V3 positions — those use NFT-based auth."
     )
     .requiredOption("--operator <address>", "address to approve/revoke (must be whitelisted, typically the LB Router)")
     .option("--pair <address>", "LB Pair contract address (skip factory lookup)")
@@ -289,7 +324,13 @@ export function registerLp(parent: Command): void {
   // `result.warnings`.
   group
     .command("positions")
-    .description("List LP positions for an owner. Routes by --provider: merchant_moe → LB, agni/fluxion → V3.")
+    .aliases(["list", "ls", "my-positions"])
+    .description(
+      "List / query / show LP positions for an owner wallet. Use for any " +
+      "\"list my LP\", \"show positions\", \"what LPs do I have\" request. " +
+      "Routes by --provider: merchant_moe → LB (ERC1155 bin balances); " +
+      "agni/fluxion → V3 NFT positions; omitted → scan Agni + Fluxion."
+    )
     .requiredOption("--owner <address>", "wallet address to query")
     .option("--provider <provider>", "provider: merchant_moe | agni | fluxion (default: scan agni + fluxion)")
     .option("--include-empty", "include zero-liquidity V3 positions", false)
@@ -388,9 +429,12 @@ export function registerLp(parent: Command): void {
   // ── lb-positions ────────────────────────────────────────────────────
   group
     .command("lb-positions")
+    .aliases(["moe-positions"])
     .description(
-      "Scan Merchant Moe Liquidity Book LP positions for a wallet. " +
-      "Checks known LB pairs around the active bin (+-25 bins)."
+      "Scan Merchant Moe Liquidity Book (LB) LP positions for a wallet. " +
+      "Use when the user specifically asks about Moe/LB positions. " +
+      "Checks known LB pairs around the active bin (±25 bins). " +
+      "(For a general \"list my LP positions\" query, prefer `lp positions` which routes by --provider.)"
     )
     .requiredOption("--owner <address>", "wallet address to query")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
@@ -438,7 +482,11 @@ export function registerLp(parent: Command): void {
   // ── pool-state ──────────────────────────────────────────────────────
   group
     .command("pool-state")
-    .description("Read V3 pool on-chain state (tick, price, liquidity)")
+    .aliases(["pool-info", "pool"])
+    .description(
+      "Read / inspect V3 pool on-chain state — current tick, price, liquidity, tick spacing. " +
+      "Use for \"check pool state\", \"what's the current price\", \"show pool info\" requests."
+    )
     .option("--pool <address>", "pool contract address (or use --token-a/--token-b/--fee-tier)")
     .option("--token-a <token>", "first token symbol or address")
     .option("--token-b <token>", "second token symbol or address")
@@ -490,7 +538,12 @@ export function registerLp(parent: Command): void {
   // ── collect-fees ────────────────────────────────────────────────────
   group
     .command("collect-fees")
-    .description("Build unsigned V3 fee collection transaction")
+    .aliases(["collect", "claim-fees", "harvest"])
+    .description(
+      "Collect / claim / harvest uncollected V3 LP fees (agni/fluxion) for a given NFT position. " +
+      "Use for \"claim fees\", \"collect rewards\", \"harvest LP earnings\" requests. " +
+      "Builds an unsigned transaction. (Moe LB fees are auto-claimed when removing liquidity.)"
+    )
     .requiredOption("--provider <provider>", "DEX provider: agni or fluxion")
     .requiredOption("--token-id <id>", "V3 NFT position token ID")
     .requiredOption("--recipient <address>", "address to receive collected fees")
@@ -514,7 +567,12 @@ export function registerLp(parent: Command): void {
   // ── suggest-ticks ───────────────────────────────────────────────────
   group
     .command("suggest-ticks")
-    .description("Suggest tick ranges for V3 LP (wide/moderate/tight strategies)")
+    .aliases(["tick-ranges", "suggest-range"])
+    .description(
+      "Suggest tick ranges / price bounds for a V3 LP position. Use for " +
+      "\"what range should I use\", \"help me pick a price range\", \"suggest LP bounds\" requests. " +
+      "Returns wide / moderate / tight strategy presets."
+    )
     .option("--pool <address>", "pool contract address (or use --token-a/--token-b/--fee-tier)")
     .option("--token-a <token>", "first token symbol or address")
     .option("--token-b <token>", "second token symbol or address")
@@ -578,8 +636,10 @@ export function registerLp(parent: Command): void {
   // ── find-pools ──────────────────────────────────────────────────────
   group
     .command("find-pools")
+    .aliases(["pools", "discover-pools"])
     .description(
-      "Discover all available pools for a token pair across Agni, Fluxion, and Merchant Moe. " +
+      "Discover / find / list all available pools for a token pair across Agni, Fluxion, and Merchant Moe. " +
+      "Use for \"what pools exist for X/Y\", \"find DEX pools\", \"list liquidity pools\" requests. " +
       "Queries factory contracts on-chain — the authoritative source."
     )
     .requiredOption("--token-a <token>", "first token symbol or address")
@@ -651,9 +711,11 @@ export function registerLp(parent: Command): void {
   // ── analyze ─────────────────────────────────────────────────────────
   group
     .command("analyze")
+    .aliases(["analyse", "pool-analysis", "apr"])
     .description(
-      "Deep pool analysis: fee APR, multi-range comparison, risk scoring, investment projections. " +
-      "Fetches 24h volume and TVL from DexScreener to compute concentrated APR across 10 range brackets."
+      "Analyze a DEX pool — fee APR, multi-range comparison, risk scoring, investment projections. " +
+      "Use for \"analyze pool\", \"estimate APR\", \"project LP returns\", \"should I provide liquidity here\" requests. " +
+      "Fetches 24h volume + TVL from DexScreener to compute concentrated APR across 10 range brackets."
     )
     .option("--pool <address>", "pool contract address (or use --token-a/--token-b/--fee-tier)")
     .option("--token-a <token>", "first token symbol or address")
