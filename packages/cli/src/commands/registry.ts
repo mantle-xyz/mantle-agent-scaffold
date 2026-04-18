@@ -20,11 +20,15 @@ export function registerRegistry(parent: Command): void {
       if (globals.json) {
         formatJson(result);
       } else {
-        const data = result as Record<string, unknown>;
+        const data = { ...(result as Record<string, unknown>) };
+        // Hide decimals row for non-token categories (where it is null by design).
+        if (data.decimals === null || data.decimals === undefined) {
+          delete data.decimals;
+        }
         formatKeyValue(data, {
           order: [
             "identifier", "network", "address", "label", "category",
-            "status", "confidence", "aliases", "source_url"
+            "decimals", "status", "confidence", "aliases", "source_url"
           ],
           labels: {
             identifier: "Identifier",
@@ -32,6 +36,7 @@ export function registerRegistry(parent: Command): void {
             address: "Address",
             label: "Label",
             category: "Category",
+            decimals: "Decimals",
             status: "Status",
             is_official: "Official",
             confidence: "Confidence",

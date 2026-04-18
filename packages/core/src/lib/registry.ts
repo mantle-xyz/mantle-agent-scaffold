@@ -8,6 +8,11 @@ export interface RegistryEntry {
   environment: "mainnet" | "testnet";
   category: "system" | "token" | "bridge" | "defi";
   address: string;
+  /**
+   * ERC-20 decimals. Populated for `category: "token"` entries only; omitted
+   * for system / bridge / defi contracts where it does not apply.
+   */
+  decimals?: number;
   status: "active" | "deprecated" | "paused" | "unknown";
   is_official: boolean;
   aliases?: string[];
