@@ -16,7 +16,7 @@ export function registerApprove(parent: Command): void {
     .requiredOption("--token <token>", "token symbol or address")
     .requiredOption("--spender <address>", "whitelisted contract address to approve")
     .requiredOption("--amount <amount>", "decimal amount to approve, or 'max' for unlimited")
-    .option("--owner <address>", "wallet address (used to check existing allowance)")
+    .requiredOption("--owner <address>", "signer wallet (token holder). Required for deterministic nonce/gas pinning and allowance skip-check.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const result = await allTools["mantle_buildApprove"].handler({

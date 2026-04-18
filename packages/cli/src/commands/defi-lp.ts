@@ -83,7 +83,7 @@ export function registerLp(parent: Command): void {
     .option("--delta-ids <json>", "relative bin IDs as JSON array. For merchant_moe")
     .option("--distribution-x <json>", "token X distribution per bin as JSON array. For merchant_moe")
     .option("--distribution-y <json>", "token Y distribution per bin as JSON array. For merchant_moe")
-    .option("--owner <address>", "wallet address that will sign (enables blocking allowance check)")
+    .requiredOption("--owner <address>", "signer wallet (token holder). Required for deterministic nonce/gas pinning and blocking allowance check.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       const hasTokenAmounts = opts.amountA != null && opts.amountB != null;
@@ -254,7 +254,7 @@ export function registerLp(parent: Command): void {
         throw new Error("--approved must be 'true' or 'false'");
       }
     )
-    .option("--owner <address>", "wallet address (used to pre-check existing approval and skip if already set)")
+    .requiredOption("--owner <address>", "signer wallet (LB share holder). Required for deterministic nonce/gas pinning and approval skip-check.")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
       if (!opts.pair && !(opts.tokenA && opts.tokenB && opts.binStep != null)) {

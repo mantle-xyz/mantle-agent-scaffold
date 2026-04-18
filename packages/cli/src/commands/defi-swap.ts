@@ -54,9 +54,9 @@ export function registerSwap(parent: Command): void {
       "Bin step from prior quote's resolved_pool_params (for cross-validation)",
       (v: string) => parseIntegerOption(v, "--quote-bin-step")
     )
-    .option(
+    .requiredOption(
       "--owner <address>",
-      "wallet address that owns token_in — enables blocking INSUFFICIENT_ALLOWANCE check (prevents STF reverts)"
+      "signer wallet (token_in holder). Required for deterministic nonce/gas pinning and blocking INSUFFICIENT_ALLOWANCE check."
     )
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
