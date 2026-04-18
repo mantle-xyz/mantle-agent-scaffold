@@ -27,6 +27,8 @@ import {
   LB_FACTORY_ABI
 } from "../lib/abis/merchant-moe-lb.js";
 import { listPairs, listAllPairs, TOKENS as DEX_TOKENS, type MoePair, type V3Pair, type DexPair } from "../config/dex-pairs.js";
+import { MANTLE_TOKENS } from "../config/tokens.js";
+import dexscreenerPoolsSnapshot from "../config/dexscreener-pools.json" with { type: "json" };
 import { V3_FEE_TIER_CANDIDATES } from "../lib/pool-discovery.js";
 
 // ---------------------------------------------------------------------------
@@ -1426,27 +1428,83 @@ interface FoundPool {
    */
   liquidity_unit?: "v3_virtual_liquidity" | "lb_active_bin_native_mixed";
   has_liquidity: boolean;
+  /**
+   * The tokens that were used to query the factory for this pool. Returned
+   * as (token_a, token_b) where `token_a` is the query anchor and `token_b`
+   * is the counterpart. The V3 and LB factories are symmetric, so this is
+   * NOT the on-chain token0/token1 ordering — callers that need the exact
+   * on-chain ordering must read `token0()`/`getTokenX()` from the pool.
+   *
+   * This field is always populated, including in pair mode where it simply
+   * mirrors the top-level `token_a`/`token_b`. In single-side mode it is the
+   * ONLY way to tell which counterpart each pool is for.
+   */
+  token_a: TokenInfo;
+  token_b: TokenInfo;
   /** DexScreener market data — null when DexScreener data is unavailable. */
   tvl_usd?: number | null;
   volume_24h_usd?: number | null;
   fee_apr_pct?: number | null;
 }
 
-async function findPools(
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const { network } = normalizeNetwork(args);
-  const client = getPublicClient(network);
-
-  const tokenAInput = requireString(args.token_a, "token_a");
-  const tokenBInput = requireString(args.token_b, "token_b");
-  const tokenA = await resolveTokenInfo(tokenAInput, network);
-  const tokenB = await resolveTokenInfo(tokenBInput, network);
-  const addrA = tokenA.address as `0x${string}`;
-  const addrB = tokenB.address as `0x${string}`;
-
+/**
+ * Scan the V3 factories (Agni + Fluxion) and the Merchant Moe LB factory for
+ * pools between `anchor` and each counterpart in `counterparts`.
+ *
+ * Correctness notes:
+ *   - Uniswap V3 `IUniswapV3Factory.getPool(tokenA, tokenB, fee)` sorts the
+ *     token pair internally and returns the same pool for either ordering.
+ *   - Trader Joe / Merchant Moe LB `ILBFactory.getLBPairInformation(tokenA,
+ *     tokenB, binStep)` likewise sorts the token pair internally via
+ *     `_sortTokens`. So we only need to scan (anchor, counterpart), never
+ *     also (counterpart, anchor) — the factory lookup is symmetric.
+ *
+ * Single-side callers pass many counterparts; pair-mode callers pass one.
+ * Pools are deduped by lowercased pool address across the (anchor,
+ * counterpart_1), (anchor, counterpart_2), ... queries so that if a single
+ * pool is reachable via two counterpart entries (unlikely, but possible if
+ * the caller accidentally supplies duplicate token addresses in differing
+ * case / symbol form), it is not double-counted.
+ */
+async function scanPairsOnChain(
+  client: ReturnType<typeof getPublicClient>,
+  network: Network,
+  anchor: TokenInfo,
+  counterparts: TokenInfo[]
+): Promise<FoundPool[]> {
   const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+  const addrAnchor = anchor.address as `0x${string}`;
+  const seen = new Set<string>();
   const pools: FoundPool[] = [];
+
+  // Filter out self-pairs and duplicates defensively: the V3 factory reverts
+  // on identical tokens, and LB returns the zero pair. Dedupe by lowercased
+  // address so we don't make redundant calls for "USDC" and "usdc" etc.
+  const uniqueCounterparts: TokenInfo[] = [];
+  const cpSeen = new Set<string>();
+  for (const cp of counterparts) {
+    const key = cp.address.toLowerCase();
+    if (key === addrAnchor.toLowerCase()) continue;
+    if (cpSeen.has(key)) continue;
+    cpSeen.add(key);
+    uniqueCounterparts.push(cp);
+  }
+  if (uniqueCounterparts.length === 0) return pools;
+
+  // Chunk counterparts so each multicall stays within typical public-RPC
+  // per-batch limits (many providers cap at ~100 calls per request). We size
+  // chunks so `counterparts × fee_tiers` and `counterparts × bin_steps` each
+  // stay under 100 per chunk:
+  //   V3: 20 counterparts × 5 fee tiers  = 100 factory calls / chunk
+  //   LB: 10 counterparts × 10 bin steps = 100 factory calls / chunk
+  // Pair mode passes 1 counterpart, so chunking is a no-op there.
+  const V3_CHUNK_SIZE = 20;
+  const LB_CHUNK_SIZE = 10;
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
 
   // --- V3 DEXes: Agni + Fluxion ---
   for (const provider of ["agni", "fluxion"] as const) {
@@ -1457,50 +1515,79 @@ async function findPools(
       continue; // factory not configured for this provider
     }
 
-    const factoryCalls = V3_FEE_TIERS.map((fee) => ({
-      address: factoryAddress,
-      abi: V3_FACTORY_ABI,
-      functionName: "getPool" as const,
-      args: [addrA, addrB, fee] as const
-    }));
-
-    const factoryResults = await client.multicall({ contracts: factoryCalls });
-
-    // For pools that exist, read liquidity
-    const liquidityCalls: Array<{
-      fee: number;
-      poolAddress: `0x${string}`;
-    }> = [];
-
-    for (let i = 0; i < V3_FEE_TIERS.length; i++) {
-      const result = factoryResults[i];
-      if (result.status === "success" && result.result && result.result !== ZERO_ADDR) {
-        liquidityCalls.push({
-          fee: V3_FEE_TIERS[i],
-          poolAddress: result.result as `0x${string}`
-        });
+    // Process counterparts in chunks of V3_CHUNK_SIZE so each `multicall`
+    // never exceeds ~100 individual `getPool` calls. `seen` is shared across
+    // chunks so the same pool is never counted twice.
+    for (const cpChunk of chunk(uniqueCounterparts, V3_CHUNK_SIZE)) {
+      interface V3Query {
+        counterpart: TokenInfo;
+        fee: number;
       }
-    }
+      const v3Queries: V3Query[] = [];
+      for (const cp of cpChunk) {
+        for (const fee of V3_FEE_TIERS) {
+          v3Queries.push({ counterpart: cp, fee });
+        }
+      }
 
-    if (liquidityCalls.length > 0) {
+      const factoryCalls = v3Queries.map((q) => ({
+        address: factoryAddress,
+        abi: V3_FACTORY_ABI,
+        functionName: "getPool" as const,
+        args: [addrAnchor, q.counterpart.address as `0x${string}`, q.fee] as const
+      }));
+
+      const factoryResults = await client.multicall({ contracts: factoryCalls });
+
+      // Collect pool hits for this chunk (dedup by address across all chunks
+      // and providers via the shared `seen` set).
+      interface V3Hit {
+        counterpart: TokenInfo;
+        fee: number;
+        poolAddress: `0x${string}`;
+      }
+      const hits: V3Hit[] = [];
+      for (let i = 0; i < v3Queries.length; i++) {
+        const result = factoryResults[i];
+        if (
+          result.status === "success" &&
+          result.result &&
+          result.result !== ZERO_ADDR
+        ) {
+          const poolAddr = (result.result as string).toLowerCase();
+          if (seen.has(poolAddr)) continue;
+          seen.add(poolAddr);
+          hits.push({
+            counterpart: v3Queries[i].counterpart,
+            fee: v3Queries[i].fee,
+            poolAddress: result.result as `0x${string}`
+          });
+        }
+      }
+
+      if (hits.length === 0) continue;
+
       const liqResults = await client.multicall({
-        contracts: liquidityCalls.map((c) => ({
-          address: c.poolAddress,
+        contracts: hits.map((h) => ({
+          address: h.poolAddress,
           abi: POOL_LIQUIDITY_ABI,
           functionName: "liquidity" as const
         }))
       });
 
-      for (let i = 0; i < liquidityCalls.length; i++) {
+      for (let i = 0; i < hits.length; i++) {
         const liqResult = liqResults[i];
-        const liquidity = liqResult.status === "success" ? (liqResult.result as bigint) : 0n;
+        const liquidity =
+          liqResult.status === "success" ? (liqResult.result as bigint) : 0n;
         pools.push({
           provider,
-          pool_address: liquidityCalls[i].poolAddress,
-          fee_tier: liquidityCalls[i].fee,
+          pool_address: hits[i].poolAddress,
+          fee_tier: hits[i].fee,
           liquidity_raw: liquidity.toString(),
           liquidity_unit: "v3_virtual_liquidity",
-          has_liquidity: liquidity > 0n
+          has_liquidity: liquidity > 0n,
+          token_a: anchor,
+          token_b: hits[i].counterpart
         });
       }
     }
@@ -1514,45 +1601,74 @@ async function findPools(
     moeFactory = "0x0000000000000000000000000000000000000000" as `0x${string}`;
   }
 
-  if (moeFactory !== ZERO_ADDR) {
-    const moeCalls = LB_BIN_STEPS.map((bs) => ({
+  if (moeFactory === ZERO_ADDR) return pools;
+
+  // Process LB counterparts in chunks so each `multicall` stays at ≤100
+  // `getLBPairInformation` calls. `seen` is shared with the V3 block above.
+  for (const cpChunk of chunk(uniqueCounterparts, LB_CHUNK_SIZE)) {
+    interface LBQuery {
+      counterpart: TokenInfo;
+      binStep: number;
+    }
+    const lbQueries: LBQuery[] = [];
+    for (const cp of cpChunk) {
+      for (const bs of LB_BIN_STEPS) {
+        lbQueries.push({ counterpart: cp, binStep: bs });
+      }
+    }
+
+    const moeCalls = lbQueries.map((q) => ({
       address: moeFactory,
       abi: LB_FACTORY_ABI,
       functionName: "getLBPairInformation" as const,
-      args: [addrA, addrB, BigInt(bs)] as const
+      args: [
+        addrAnchor,
+        q.counterpart.address as `0x${string}`,
+        BigInt(q.binStep)
+      ] as const
     }));
 
-    const moeResults = await client.multicall({ contracts: moeCalls });
+    const moeResults =
+      moeCalls.length > 0 ? await client.multicall({ contracts: moeCalls }) : [];
 
-    // Collect live LB pairs from factory results
     interface LBPairHit {
+      counterpart: TokenInfo;
       binStep: number;
       pairAddress: `0x${string}`;
     }
     const lbPairs: LBPairHit[] = [];
-    for (let i = 0; i < LB_BIN_STEPS.length; i++) {
+    for (let i = 0; i < lbQueries.length; i++) {
       const result = moeResults[i];
-      if (result.status === "success" && result.result) {
-        const info = result.result as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
+      if (result && result.status === "success" && result.result) {
+        const info = result.result as {
+          binStep: number;
+          LBPair: string;
+          createdByOwner: boolean;
+          ignoredForRouting: boolean;
+        };
         if (info.LBPair && info.LBPair !== ZERO_ADDR) {
+          const poolAddr = info.LBPair.toLowerCase();
+          if (seen.has(poolAddr)) continue;
+          seen.add(poolAddr);
           lbPairs.push({
-            binStep: LB_BIN_STEPS[i],
+            counterpart: lbQueries[i].counterpart,
+            binStep: lbQueries[i].binStep,
             pairAddress: info.LBPair as `0x${string}`
           });
         }
       }
     }
 
-    // Batch-read active bin IDs
-    const activeIdResults = lbPairs.length > 0
-      ? await client.multicall({
-          contracts: lbPairs.map((p) => ({
-            address: p.pairAddress,
-            abi: LB_PAIR_ABI,
-            functionName: "getActiveId" as const
-          }))
-        })
-      : [];
+    if (lbPairs.length === 0) continue;
+
+    // Batch-read active bin IDs for this chunk
+    const activeIdResults = await client.multicall({
+      contracts: lbPairs.map((p) => ({
+        address: p.pairAddress,
+        abi: LB_PAIR_ABI,
+        functionName: "getActiveId" as const
+      }))
+    });
 
     // For pairs with a valid activeId, batch-read active bin reserves.
     // The active bin's (reserveX + reserveY) is the closest analogue to
@@ -1569,7 +1685,12 @@ async function findPools(
     }> = [];
     for (let i = 0; i < lbPairs.length; i++) {
       const r = activeIdResults[i];
-      if (r && r.status === "success" && typeof r.result === "number" && r.result > 0) {
+      if (
+        r &&
+        r.status === "success" &&
+        typeof r.result === "number" &&
+        r.result > 0
+      ) {
         binCallIndex.push({ pairIdx: i, activeId: r.result });
         binCalls.push({
           address: lbPairs[i].pairAddress,
@@ -1580,9 +1701,8 @@ async function findPools(
       }
     }
 
-    const binResults = binCalls.length > 0
-      ? await client.multicall({ contracts: binCalls })
-      : [];
+    const binResults =
+      binCalls.length > 0 ? await client.multicall({ contracts: binCalls }) : [];
 
     // Map active-bin reserves back to each pair (default: zero = dead)
     const liquidityByPair = new Map<number, bigint>();
@@ -1605,12 +1725,265 @@ async function findPools(
         bin_step: lbPairs[i].binStep,
         liquidity_raw: liquidity.toString(),
         liquidity_unit: "lb_active_bin_native_mixed",
-        has_liquidity: liquidity > 0n
+        has_liquidity: liquidity > 0n,
+        token_a: anchor,
+        token_b: lbPairs[i].counterpart
       });
     }
   }
 
-  // ── Fetch DexScreener market data for all pools with liquidity ──────
+  return pools;
+}
+
+/**
+ * Shape of an entry in `config/dexscreener-pools.json`. The file is a local
+ * snapshot of the DexScreener Mantle pool set (liquidity_usd >= 1000, fee
+ * tiers / bin steps verified on-chain), regenerated out-of-band via
+ * `scripts/verify-pools.mjs`. Using this instead of the live `/token-pairs`
+ * endpoint makes counterpart discovery fully deterministic and network-free.
+ */
+interface DexScreenerPoolsSnapshotEntry {
+  provider: string;
+  pool: string;
+  baseToken: { symbol: string; address: string };
+  quoteToken: { symbol: string; address: string };
+  feeTier?: number;
+  binStep?: number;
+  liquidityUsd?: number;
+}
+
+interface DexScreenerPoolsSnapshot {
+  meta: { fetched_at: string | null; total_pools: number };
+  pools: DexScreenerPoolsSnapshotEntry[];
+}
+
+function loadDexScreenerPoolsSnapshot(): DexScreenerPoolsSnapshot {
+  const raw = dexscreenerPoolsSnapshot as {
+    _meta?: { fetched_at?: string; total_pools?: number };
+    pools?: DexScreenerPoolsSnapshotEntry[];
+  };
+  return {
+    meta: {
+      fetched_at: raw?._meta?.fetched_at ?? null,
+      total_pools: raw?._meta?.total_pools ?? (Array.isArray(raw?.pools) ? raw.pools.length : 0)
+    },
+    pools: Array.isArray(raw?.pools) ? raw.pools : []
+  };
+}
+
+/**
+ * Build the list of counterpart tokens to scan against `anchor` in single-side
+ * findPools mode. We deliberately union THREE independent LOCAL sources so
+ * no pool is silently missed AND we never fail because a live API is down:
+ *
+ *   1. `config/dexscreener-pools.json` — local snapshot of DexScreener's
+ *      Mantle pool set (liquidity ≥ $1000, fee tiers / bin steps already
+ *      verified on-chain). This replaces the old live call to the
+ *      `/token-pairs/v1` endpoint — same data, zero network dependency.
+ *   2. The static pair registry (`listAllPairs()`) — curated from
+ *      DexScreener + GeckoTerminal + protocol docs, a superset of (1).
+ *   3. Every token in `MANTLE_TOKENS[network]` — brute-force fallback so
+ *      on-chain-only pools between the anchor and any well-known token are
+ *      still discovered when neither snapshot mentions them.
+ *
+ * The union is keyed by lowercased address so duplicates collapse. The
+ * anchor itself is excluded. Counterpart discovery is synchronous with
+ * respect to the network — live DexScreener is still called LATER for
+ * market-data enrichment (TVL/volume/APR) on the pools we actually found,
+ * but the "don't miss pools" guarantee no longer rides on that call.
+ *
+ * @returns `sources` lists the sources that were CHECKED (not just matched);
+ *          this is useful to debug "did we actually look at X?" without
+ *          depending on whether X happened to have matches. `snapshot_meta`
+ *          surfaces the snapshot's fetched_at timestamp so callers can
+ *          judge staleness.
+ */
+export function _collectCounterpartsForSingleSide(
+  anchor: TokenInfo,
+  network: Network
+): {
+  counterparts: TokenInfo[];
+  sources: string[];
+  snapshot_meta: { fetched_at: string | null; total_pools: number };
+} {
+  return collectCounterpartsForSingleSide(anchor, network);
+}
+
+function collectCounterpartsForSingleSide(
+  anchor: TokenInfo,
+  network: Network
+): {
+  counterparts: TokenInfo[];
+  sources: string[];
+  snapshot_meta: { fetched_at: string | null; total_pools: number };
+} {
+  const anchorAddr = anchor.address.toLowerCase();
+  const seen = new Map<string, TokenInfo>();
+
+  const add = (addr: string, symbol: string | null, decimals: number | null) => {
+    if (!addr) return;
+    if (!isAddress(addr, { strict: false })) return;
+    const key = addr.toLowerCase();
+    if (key === anchorAddr) return;
+    if (seen.has(key)) return;
+    seen.set(key, {
+      address: getAddress(addr),
+      symbol,
+      decimals
+    });
+  };
+
+  // `sources` captures which sources were CHECKED, regardless of whether
+  // they produced counterparts. "`static_pair_registry` not in sources"
+  // unambiguously means "we did not consult it", not "we consulted and
+  // found nothing".
+  const sources: string[] = [];
+  const snapshot = loadDexScreenerPoolsSnapshot();
+
+  // 1) Local DexScreener pool snapshot. The snapshot is mainnet-only today;
+  //    if we add sepolia coverage later, gate this by network.
+  if (network === "mainnet") {
+    sources.push("dexscreener_pools_snapshot");
+    for (const entry of snapshot.pools) {
+      const baseAddr = entry.baseToken?.address;
+      const quoteAddr = entry.quoteToken?.address;
+      if (baseAddr && baseAddr.toLowerCase() === anchorAddr) {
+        add(quoteAddr, entry.quoteToken?.symbol ?? null, null);
+      } else if (quoteAddr && quoteAddr.toLowerCase() === anchorAddr) {
+        add(baseAddr, entry.baseToken?.symbol ?? null, null);
+      }
+    }
+  }
+
+  // 2) Static pair registry — curated superset of the DexScreener snapshot.
+  //    Always consulted regardless of network.
+  sources.push("static_pair_registry");
+  for (const pair of listAllPairs()) {
+    const aAddr = pair.tokenAAddress;
+    const bAddr = pair.tokenBAddress;
+    if (aAddr.toLowerCase() === anchorAddr) {
+      add(bAddr, pair.tokenB, null);
+    } else if (bAddr.toLowerCase() === anchorAddr) {
+      add(aAddr, pair.tokenA, null);
+    }
+  }
+
+  // 3) Every registry token — brute-force fallback so we don't miss an
+  //    on-chain-only pool against a well-known token. Symbols + decimals
+  //    come from the registry (free, no RPC).
+  sources.push("mantle_token_registry");
+  for (const entry of Object.values(MANTLE_TOKENS[network])) {
+    if (entry.address === "native") continue; // can't pair native gas token in V3/LB
+    if (entry.address.toLowerCase() === anchorAddr) continue;
+    add(entry.address, entry.symbol, entry.decimals);
+  }
+
+  return {
+    counterparts: Array.from(seen.values()),
+    sources,
+    snapshot_meta: snapshot.meta
+  };
+}
+
+async function findPools(
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const { network } = normalizeNetwork(args);
+  const client = getPublicClient(network);
+
+  // Single-side mode: accept just one of token_a / token_b. At least one
+  // must be provided. Both-provided is pair mode (unchanged behavior).
+  const tokenAInputRaw = args.token_a;
+  const tokenBInputRaw = args.token_b;
+  const hasA =
+    typeof tokenAInputRaw === "string" && tokenAInputRaw.trim().length > 0;
+  const hasB =
+    typeof tokenBInputRaw === "string" && tokenBInputRaw.trim().length > 0;
+
+  if (!hasA && !hasB) {
+    throw new MantleMcpError(
+      "INVALID_INPUT",
+      "At least one of token_a or token_b is required.",
+      "Provide a token symbol/address in token_a (or token_b) to search for pools involving that token. Provide both to restrict the search to a specific pair.",
+      { field: "token_a" }
+    );
+  }
+
+  const warnings: string[] = [];
+  let mode: "pair" | "single_side";
+  let anchor: TokenInfo;
+  let counterparts: TokenInfo[];
+  let pairTokenA: TokenInfo | null = null;
+  let pairTokenB: TokenInfo | null = null;
+  let counterpartSources: string[] = [];
+  let snapshotMeta: { fetched_at: string | null; total_pools: number } | null = null;
+
+  if (hasA && hasB) {
+    mode = "pair";
+    const a = await resolveTokenInfo((tokenAInputRaw as string).trim(), network);
+    const b = await resolveTokenInfo((tokenBInputRaw as string).trim(), network);
+    if (a.address.toLowerCase() === b.address.toLowerCase()) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "token_a and token_b must be different tokens.",
+        "Use two distinct tokens to query a pair. For single-token discovery, provide only one of token_a or token_b.",
+        { token_a: a.address, token_b: b.address }
+      );
+    }
+    anchor = a;
+    counterparts = [b];
+    pairTokenA = a;
+    pairTokenB = b;
+  } else {
+    mode = "single_side";
+    const provided = (hasA ? tokenAInputRaw : tokenBInputRaw) as string;
+    anchor = await resolveTokenInfo(provided.trim(), network);
+    const collected = collectCounterpartsForSingleSide(anchor, network);
+    counterparts = collected.counterparts;
+    counterpartSources = collected.sources;
+    snapshotMeta = collected.snapshot_meta;
+    if (counterparts.length === 0) {
+      // No candidates at all — return empty result rather than silently
+      // scanning zero pairs.
+      return {
+        mode,
+        anchor_token: {
+          address: anchor.address,
+          symbol: anchor.symbol,
+          decimals: anchor.decimals
+        },
+        token_a: hasA
+          ? { address: anchor.address, symbol: anchor.symbol, decimals: anchor.decimals }
+          : null,
+        token_b: hasB
+          ? { address: anchor.address, symbol: anchor.symbol, decimals: anchor.decimals }
+          : null,
+        pools: [],
+        recommended_pool: null,
+        total_found: 0,
+        with_liquidity: 0,
+        scanned: {
+          v3_providers: ["agni", "fluxion"],
+          v3_fee_tiers: [...V3_FEE_TIERS],
+          lb_bin_steps: [...LB_BIN_STEPS],
+          counterparts_scanned: 0,
+          counterpart_sources: counterpartSources,
+          snapshot_meta: snapshotMeta
+        },
+        warnings: [
+          ...warnings,
+          "No counterpart tokens found for single-side discovery."
+        ],
+        dexscreener_warning: null,
+        queried_at_utc: nowUtc()
+      };
+    }
+  }
+
+  // ── On-chain pool scan (shared between pair and single-side modes) ────
+  const pools = await scanPairsOnChain(client, network, anchor, counterparts);
+
+  // ── Fetch DexScreener market data for all pools with liquidity ────────
   const poolsWithLiquidity = pools.filter((p) => p.has_liquidity);
   let dexScreenerWarning: string | null = null;
 
@@ -1703,6 +2076,8 @@ async function findPools(
     provider: string;
     fee_tier?: number;
     bin_step?: number;
+    token_a: TokenInfo;
+    token_b: TokenInfo;
     tvl_usd: number | null;
     volume_24h_usd: number | null;
     fee_apr_pct: number | null;
@@ -1725,6 +2100,8 @@ async function findPools(
       provider: best.provider,
       fee_tier: best.fee_tier,
       bin_step: best.bin_step,
+      token_a: best.token_a,
+      token_b: best.token_b,
       tvl_usd: best.tvl_usd ?? null,
       volume_24h_usd: best.volume_24h_usd ?? null,
       fee_apr_pct: best.fee_apr_pct ?? null,
@@ -1732,17 +2109,38 @@ async function findPools(
     };
   }
 
+  // Back-compat: in pair mode, top-level `token_a`/`token_b` mirror the
+  // provided inputs. In single-side mode, only the provided side is filled
+  // in and the other side is null — downstream formatters should check
+  // `mode` and/or each pool's per-pool `token_a`/`token_b`.
+  const outTokenA = mode === "pair"
+    ? pairTokenA
+    : hasA ? anchor : null;
+  const outTokenB = mode === "pair"
+    ? pairTokenB
+    : hasB ? anchor : null;
+
   return {
-    token_a: {
-      address: tokenA.address,
-      symbol: tokenA.symbol,
-      decimals: tokenA.decimals
+    mode,
+    anchor_token: {
+      address: anchor.address,
+      symbol: anchor.symbol,
+      decimals: anchor.decimals
     },
-    token_b: {
-      address: tokenB.address,
-      symbol: tokenB.symbol,
-      decimals: tokenB.decimals
-    },
+    token_a: outTokenA
+      ? {
+          address: outTokenA.address,
+          symbol: outTokenA.symbol,
+          decimals: outTokenA.decimals
+        }
+      : null,
+    token_b: outTokenB
+      ? {
+          address: outTokenB.address,
+          symbol: outTokenB.symbol,
+          decimals: outTokenB.decimals
+        }
+      : null,
     pools,
     recommended_pool,
     total_found: pools.length,
@@ -1750,8 +2148,15 @@ async function findPools(
     scanned: {
       v3_providers: ["agni", "fluxion"],
       v3_fee_tiers: [...V3_FEE_TIERS],
-      lb_bin_steps: [...LB_BIN_STEPS]
+      lb_bin_steps: [...LB_BIN_STEPS],
+      counterparts_scanned: counterparts.length,
+      counterpart_sources:
+        mode === "single_side"
+          ? counterpartSources
+          : ["explicit_pair"],
+      snapshot_meta: mode === "single_side" ? snapshotMeta : null
     },
+    warnings: warnings.length > 0 ? warnings : undefined,
     dexscreener_warning: dexScreenerWarning,
     queried_at_utc: nowUtc()
   };
@@ -2795,34 +3200,43 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_findPools: {
     name: "mantle_findPools",
     description:
-      "Discover all available liquidity pools for a token pair across ALL Mantle DEXes (Agni, Fluxion, Merchant Moe) by querying factory contracts on-chain. Returns every pool with its fee tier/bin step, whether it has liquidity, and DexScreener market data (TVL, 24h volume, fee APR).\n\n" +
+      "Discover available liquidity pools on Mantle across all indexed DEXes (Agni, Fluxion, Merchant Moe) by querying factory contracts on-chain. Returns every pool with its fee tier/bin step, whether it has liquidity, and DexScreener market data (TVL, 24h volume, fee APR).\n\n" +
+      "TWO MODES:\n" +
+      "- PAIR MODE (both token_a AND token_b provided): scans the specific pair across all fee tiers / bin steps. Same behavior as before.\n" +
+      "- SINGLE-SIDE MODE (only one of token_a OR token_b provided): finds every pool that involves the given token, regardless of whether it is the pool's token0/tokenX or token1/tokenY. Counterparts are enumerated from three independent LOCAL sources — the bundled DexScreener pool snapshot (`config/dexscreener-pools.json`), the curated static pair registry, and every token in the Mantle registry — so no pool is missed and counterpart discovery never depends on a live API call. Per-pool `token_a`/`token_b` identify the actual counterpart for each pool.\n\n" +
       "POOL RECOMMENDATION: Returns a `recommended_pool` field — the pool with the highest composite score " +
       "(TVL × 0.6 + volume × 0.4). Always prefer the recommended pool when adding LP unless the user has a specific preference.\n\n" +
       "This is the authoritative pool discovery tool — it queries factory contracts directly, not external indexers. " +
       "Use it BEFORE adding LP to find the best pool.\n\n" +
-      "Scans:\n- Agni & Fluxion: fee tiers 100 (0.01%), 500 (0.05%), 3000 (0.3%), 10000 (1%)\n- Merchant Moe: bin steps 1, 2, 5, 10, 15, 20, 25, 50, 75, 100\n\n" +
+      "Scans:\n- Agni & Fluxion: fee tiers 100 (0.01%), 500 (0.05%), 2500 (0.25%), 3000 (0.3%), 10000 (1%)\n- Merchant Moe: bin steps 1, 2, 5, 10, 15, 20, 25, 50, 75, 100\n\n" +
       "Pool output fields:\n" +
+      "- token_a / token_b (per pool): the actual token pair for that pool (anchor first in single-side mode, input order in pair mode). Factory lookups are symmetric so on-chain token0/token1 ordering may differ — use these for 'is FBTC tokenA or tokenB?' only as an informational label.\n" +
       "- tvl_usd: Total Value Locked in USD (from DexScreener)\n" +
       "- volume_24h_usd: 24-hour trading volume in USD\n" +
       "- fee_apr_pct: Estimated fee APR based on volume/TVL\n\n" +
-      "Examples:\n- Find USDC/USDe pools: token_a='USDC', token_b='USDe'\n- Find WMNT/USDC pools: token_a='WMNT', token_b='USDC'",
+      "Examples:\n" +
+      "- Find USDC/USDe pools (pair mode): token_a='USDC', token_b='USDe'\n" +
+      "- Find all FBTC pools (single-side mode): token_a='FBTC' (omit token_b) — returns FBTC/WMNT, FBTC/USDT, … across all DEXes.\n" +
+      "- Equivalent single-side: token_b='FBTC' (omit token_a) — identical result, same pools.",
     inputSchema: {
       type: "object",
       properties: {
         token_a: {
           type: "string",
-          description: "First token symbol or address."
+          description:
+            "First token symbol or address. Optional — provide only this (and omit token_b) to run single-side discovery: every pool involving this token on any DEX is returned. Provide with token_b for a pair query."
         },
         token_b: {
           type: "string",
-          description: "Second token symbol or address."
+          description:
+            "Second token symbol or address. Optional — provide only this (and omit token_a) to run single-side discovery. Provide with token_a for a pair query. At least one of token_a / token_b is required."
         },
         network: {
           type: "string",
           description: "Network: 'mainnet' (default) or 'sepolia'."
         }
       },
-      required: ["token_a", "token_b"]
+      required: []
     },
     handler: findPools
   },

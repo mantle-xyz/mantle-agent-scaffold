@@ -344,11 +344,11 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "none",
-    summary: "Discover all available pools for a token pair across Agni, Fluxion, and Merchant Moe. Returns TVL, 24h volume, fee APR from DexScreener and a recommended_pool with the highest composite score.",
-    cli_command: "mantle-cli lp find-pools --token-a <token> --token-b <token> --json",
-    example: "{ \"token_a\": \"USDC\", \"token_b\": \"USDe\" }",
+    summary: "Discover pools across Agni, Fluxion, and Merchant Moe. Pair mode: provide both token_a & token_b to scan a specific pair. Single-side mode: provide only one of token_a / token_b to find every pool involving that token (anchor may be tokenA or tokenB of each pool). Counterparts are enumerated entirely from local sources (bundled DexScreener snapshot + curated pair registry + Mantle token registry) — no live API call on the 'don't miss pools' path. Returns TVL, 24h volume, fee APR from DexScreener and a recommended_pool with the highest composite score.",
+    cli_command: "mantle-cli lp find-pools [--token-a <token>] [--token-b <token>] --json",
+    example: "{ \"token_a\": \"FBTC\" }  // single-side: all FBTC pools",
     workflow_before: ["mantle_getV3PoolState", "mantle_analyzePool"],
-    tags: ["pool", "discover", "factory", "all DEX", "TVL", "volume", "recommendation"]
+    tags: ["pool", "discover", "factory", "all DEX", "TVL", "volume", "recommendation", "single-side"]
   },
   // mantle_discoverTopPools — temporarily disabled (DexScreener rate-limit issues)
 

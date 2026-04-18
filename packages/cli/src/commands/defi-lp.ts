@@ -638,14 +638,24 @@ export function registerLp(parent: Command): void {
     .command("find-pools")
     .aliases(["pools", "discover-pools"])
     .description(
-      "Discover / find / list all available pools for a token pair across Agni, Fluxion, and Merchant Moe. " +
-      "Use for \"what pools exist for X/Y\", \"find DEX pools\", \"list liquidity pools\" requests. " +
+      "Discover / find / list all available pools across Agni, Fluxion, and Merchant Moe. " +
+      "Provide BOTH --token-a and --token-b for a pair query, or EITHER ONE alone for single-side " +
+      "discovery (every pool involving that token, across any counterpart). " +
+      "Use for \"what pools exist for X/Y\", \"find all FBTC pools\", \"list liquidity pools\" requests. " +
       "Queries factory contracts on-chain — the authoritative source."
     )
-    .requiredOption("--token-a <token>", "first token symbol or address")
-    .requiredOption("--token-b <token>", "second token symbol or address")
+    .option("--token-a <token>", "first token symbol or address (optional; at least one of --token-a / --token-b is required)")
+    .option("--token-b <token>", "second token symbol or address (optional; at least one of --token-a / --token-b is required)")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
+      if (!opts.tokenA && !opts.tokenB) {
+        console.error(
+          "\n  error: at least one of --token-a or --token-b is required.\n" +
+          "  Provide both for a specific pair, or one alone for single-side discovery.\n"
+        );
+        process.exitCode = 1;
+        return;
+      }
       const result = await allTools["mantle_findPools"].handler({
         token_a: opts.tokenA,
         token_b: opts.tokenB,
@@ -655,38 +665,64 @@ export function registerLp(parent: Command): void {
         formatJson(result);
       } else {
         const data = result as Record<string, unknown>;
-        const tokenA = data.token_a as Record<string, unknown>;
-        const tokenB = data.token_b as Record<string, unknown>;
-        console.log(
-          `\n  ${tokenA.symbol}/${tokenB.symbol} — ` +
-          `${data.with_liquidity} pools with liquidity (${data.total_found} total)\n`
-        );
+        const mode = (data.mode as string) ?? "pair";
+        const anchor = data.anchor_token as Record<string, unknown> | undefined;
+        const tokenA = data.token_a as Record<string, unknown> | null | undefined;
+        const tokenB = data.token_b as Record<string, unknown> | null | undefined;
+        if (mode === "single_side") {
+          const anchorSym = (anchor?.symbol as string | null | undefined) ?? (anchor?.address as string) ?? "?";
+          console.log(
+            `\n  ${anchorSym} — ${data.with_liquidity} pools with liquidity ` +
+            `(${data.total_found} total across ${(data.scanned as Record<string, unknown> | undefined)?.counterparts_scanned ?? 0} counterparts)\n`
+          );
+        } else {
+          const aSym = (tokenA?.symbol as string | null | undefined) ?? "?";
+          const bSym = (tokenB?.symbol as string | null | undefined) ?? "?";
+          console.log(
+            `\n  ${aSym}/${bSym} — ` +
+            `${data.with_liquidity} pools with liquidity (${data.total_found} total)\n`
+          );
+        }
         const pools = (data.pools ?? []) as Record<string, unknown>[];
-        formatTable(pools, [
-          { key: "provider", label: "DEX" },
+        // In single-side mode, the most useful piece of info is WHICH
+        // counterpart each pool is against. Surface it as a column.
+        const columns: Array<Record<string, unknown>> = [
+          { key: "provider", label: "DEX" }
+        ];
+        if (mode === "single_side") {
+          columns.push({
+            key: "token_b",
+            label: "Counterpart",
+            format: (v: unknown) => {
+              const t = v as Record<string, unknown> | null | undefined;
+              return (t?.symbol as string | null | undefined) ?? (t?.address as string | undefined)?.slice(0, 10) ?? "?";
+            }
+          });
+        }
+        columns.push(
           {
             key: "fee_tier",
             label: "Fee Tier",
             align: "right",
-            format: (v) => v != null ? `${Number(v) / 10000}%` : "-"
+            format: (v: unknown) => v != null ? `${Number(v) / 10000}%` : "-"
           },
           {
             key: "bin_step",
             label: "Bin Step",
             align: "right",
-            format: (v) => v != null ? String(v) : "-"
+            format: (v: unknown) => v != null ? String(v) : "-"
           },
           { key: "pool_address", label: "Pool Address" },
           {
             key: "has_liquidity",
             label: "Liquid",
-            format: (v) => v === true ? "YES" : "NO"
+            format: (v: unknown) => v === true ? "YES" : "NO"
           },
           {
             key: "liquidity_raw",
             label: "Liquidity",
             align: "right",
-            format: (v) => {
+            format: (v: unknown) => {
               const n = BigInt(v as string);
               if (n === 0n) return "-";
               if (n > 10n ** 18n) return (Number(n / (10n ** 12n)) / 1e6).toFixed(1) + "T";
@@ -698,13 +734,15 @@ export function registerLp(parent: Command): void {
             // providers (V3 virtual-L vs LB mixed-decimal reserves are not the same unit).
             key: "liquidity_unit",
             label: "Unit",
-            format: (v) => {
+            format: (v: unknown) => {
               if (v === "v3_virtual_liquidity") return "v3-L";
               if (v === "lb_active_bin_native_mixed") return "lb-bin-mixed";
               return v ? String(v) : "-";
             }
           }
-        ]);
+        );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        formatTable(pools, columns as any);
       }
     });
 
