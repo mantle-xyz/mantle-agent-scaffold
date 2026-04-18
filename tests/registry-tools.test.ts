@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MantleMcpError } from "@mantleio/mantle-core/errors.js";
 import { resolveAddress, validateAddress } from "@mantleio/mantle-core/tools/registry.js";
+import { MANTLE_TOKENS } from "@mantleio/mantle-core/config/tokens.js";
+import { getAddress } from "viem";
 
 describe("registry tools", () => {
   it("resolves a known token from registry", async () => {
@@ -8,6 +10,7 @@ describe("registry tools", () => {
     expect(result.address).toBe("0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9");
     expect(result.confidence).toBe("high");
     expect(result.category).toBe("token");
+    expect(result.decimals).toBe(6);
   });
 
   it("supports legacy environment=testnet alias", async () => {
@@ -39,5 +42,23 @@ describe("registry tools", () => {
     expect(result.valid_format).toBe(true);
     expect(result.has_code).toBe(true);
     expect(result.registry_match).toBeTruthy();
+  });
+
+  it("returns null decimals for non-token categories", async () => {
+    const result = await resolveAddress({ identifier: "AGNI_ROUTER", network: "mainnet" });
+    expect(result.category).toBe("defi");
+    expect(result.decimals).toBeNull();
+  });
+
+  it("resolves every ERC-20 in tokens.ts with matching decimals/address", async () => {
+    for (const [network, tokens] of Object.entries(MANTLE_TOKENS)) {
+      for (const [key, token] of Object.entries(tokens)) {
+        if (token.address === "native") continue; // native MNT is not in registry by design
+        const result = await resolveAddress({ identifier: key, network });
+        expect(result.category, `${network}/${key} category`).toBe("token");
+        expect(result.address, `${network}/${key} address`).toBe(getAddress(token.address));
+        expect(result.decimals, `${network}/${key} decimals`).toBe(token.decimals);
+      }
+    }
   });
 });

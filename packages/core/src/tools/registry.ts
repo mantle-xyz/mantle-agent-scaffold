@@ -105,6 +105,7 @@ export async function resolveAddress(args: Record<string, unknown>): Promise<any
     address: getAddress(entry.address),
     label: entry.label,
     category: entry.category,
+    decimals: entry.decimals ?? null,
     status: entry.status,
     is_official: entry.is_official,
     source_url: entry.source?.url ?? "",

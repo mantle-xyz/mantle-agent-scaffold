@@ -1,8 +1,8 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "network": "mantle",
-  "updated_at": "2026-02-28T00:00:00Z",
-  "notes": "Curated Mantle registry used by mantle_resolveAddress.",
+  "updated_at": "2026-04-18T00:00:00Z",
+  "notes": "Curated Mantle registry used by mantle_resolveAddress. Token entries carry an ERC-20 `decimals` field verified on-chain; non-token entries omit it.",
   "chain_ids": {
     "mainnet": 5000,
     "testnet": 5003
@@ -14,12 +14,13 @@
       "environment": "mainnet",
       "category": "token",
       "address": "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
       "aliases": ["Wrapped MNT"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -28,12 +29,13 @@
       "environment": "mainnet",
       "category": "token",
       "address": "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -42,26 +44,73 @@
       "environment": "mainnet",
       "category": "token",
       "address": "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+      "decimals": 6,
       "status": "active",
       "is_official": true,
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
       "key": "USDT",
-      "label": "Tether",
+      "label": "Tether USD",
       "environment": "mainnet",
       "category": "token",
       "address": "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+      "decimals": 6,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Tether"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "USDT0",
+      "label": "USDT0 (LayerZero OFT)",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+      "decimals": 6,
       "status": "active",
       "is_official": true,
       "aliases": [],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "USDe",
+      "label": "USDe",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["USDE"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "sUSDe",
+      "label": "Staked USDe",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["SUSDE"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -70,12 +119,13 @@
       "environment": "mainnet",
       "category": "token",
       "address": "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
       "aliases": ["METH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -84,12 +134,298 @@
       "environment": "mainnet",
       "category": "token",
       "address": "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
       "aliases": ["CMETH"],
       "source": {
         "url": "https://token-list.mantle.xyz",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "FBTC",
+      "label": "Fire Bitcoin",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xC96dE26018A54D51c097160568752c4E3BD6C364",
+      "decimals": 8,
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wrsETH",
+      "label": "Wrapped rsETH",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WRSETH", "rsETHWrapper"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "syrupUSDT",
+      "label": "Syrup USDT",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x051665f2455116e929b9972c36d23070F5054Ce0",
+      "decimals": 6,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["SYRUPUSDT"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "MOE",
+      "label": "Moe Token",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Merchant Moe"],
+      "source": {
+        "url": "https://docs.merchantmoe.com",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "GHO",
+      "label": "GHO",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["Gho Token"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wTSLAx",
+      "label": "Wrapped Tesla xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x43680aBF18cf54898Be84C6eF78237CFBD441883",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WTSLAX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wAAPLx",
+      "label": "Wrapped Apple xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x5AA7649fdbDa47De64A07aC81D64B682AF9C0724",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WAAPLX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wNVDAx",
+      "label": "Wrapped NVIDIA xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x93E62845C1DD5822EbC807ab71A5Fb750DecD15A",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WNVDAX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wGOOGLx",
+      "label": "Wrapped Alphabet xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x1630F08370917E79df0B7572395a5e907508bBBc",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WGOOGLX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wMETAx",
+      "label": "Wrapped Meta xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x4E41a262cAA93C6575d336E0a4eb79f3c67caa06",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WMETAX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wQQQx",
+      "label": "Wrapped Nasdaq xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xdbD9232fee15351068Fe02F0683146e16D9f2cEa",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WQQQX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wSPYx",
+      "label": "Wrapped S&P 500 xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xc88FcD8B874fDb3256E8B55b3decB8c24EAb4c02",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WSPYX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wMSTRx",
+      "label": "Wrapped MicroStrategy xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x266E5923F6118F8b340cA5a23AE7f71897361476",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WMSTRX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wHOODx",
+      "label": "Wrapped Robinhood xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x953707d7A1cB30cc5C636bDA8EaeBe410341eB14",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WHOODX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "wCRCLx",
+      "label": "Wrapped Circle xStock",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xA90872ACa656eBE47bDEBF3B19Ec9Dd9C5ADC7f8",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": ["WCRCLX"],
+      "source": {
+        "url": "https://token-list.mantle.xyz",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "BSB",
+      "label": "Block Street",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xe5c330ADdf7aa9C7838dA836436142c56a15aa95",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "ELSA",
+      "label": "Elsa",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x29cC30f9D113B356Ce408667aa6433589CeCBDcA",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "VOOI",
+      "label": "VOOI",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0xd81a4aDea9932a6BDba0bDBc8C5Fd4C78e5A09f1",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
+      }
+    },
+    {
+      "key": "SCOR",
+      "label": "Scor",
+      "environment": "mainnet",
+      "category": "token",
+      "address": "0x8DDB986b11c039a6CC1dbcabd62baE911b348F33",
+      "decimals": 18,
+      "status": "active",
+      "is_official": true,
+      "aliases": [],
+      "source": {
+        "url": "https://app.fluxion.network",
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     },
     {
@@ -209,7 +545,7 @@
       "label": "Fluxion Swap Router",
       "environment": "mainnet",
       "category": "defi",
-      "address": "0x5628a59df0ecac3f3171f877a94beb26ba6dfaa0",
+      "address": "0x5628a59dF0ECAC3f3171f877A94bEb26BA6DFAa0",
       "status": "active",
       "is_official": true,
       "aliases": ["Fluxion Router"],
@@ -223,7 +559,7 @@
       "label": "Fluxion Position Manager",
       "environment": "mainnet",
       "category": "defi",
-      "address": "0x2b70c4e7ca8e920435a5db191e066e9e3afd8db3",
+      "address": "0x2b70C4e7cA8E920435A5dB191e066E9E3AFd8DB3",
       "status": "active",
       "is_official": true,
       "aliases": [],
@@ -252,12 +588,13 @@
       "environment": "testnet",
       "category": "token",
       "address": "0x19f5557E23e9914A18239990f6C70D68FDF0deD5",
+      "decimals": 18,
       "status": "active",
       "is_official": true,
       "aliases": ["Wrapped MNT Sepolia"],
       "source": {
         "url": "https://docs.mantle.xyz/network/for-developers/quick-access",
-        "retrieved_at": "2026-04-15T00:00:00Z"
+        "retrieved_at": "2026-04-18T00:00:00Z"
       }
     }
   ]
