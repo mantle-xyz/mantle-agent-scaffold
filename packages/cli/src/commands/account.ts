@@ -37,11 +37,34 @@ export function registerAccount(parent: Command): void {
 
   group
     .command("token-balances")
-    .description("Batch read ERC-20 token balances")
+    .description(
+      "Batch read ERC-20 token balances (ERC-20 only; query native MNT via `account balance`)"
+    )
     .argument("<address>", "wallet address")
     .option(
       "--tokens <tokens>",
-      "comma-separated token symbols or addresses (defaults to a curated whitelist if omitted)"
+      "comma-separated token symbols or addresses — e.g. 'WMNT,WETH,USDC,USDT,USDT0,mETH,cmETH,FBTC,MOE'. Omit to use the curated default whitelist (see `--help` for the full list)."
+    )
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Recommended token symbols (Mantle mainnet):",
+        "  Majors & stables   WMNT, WETH, USDC, USDT, USDT0",
+        "  Yield stables      USDe, sUSDe, GHO, syrupUSDT",
+        "  LSTs / restaking   mETH, cmETH, wrsETH",
+        "  BTC-backed         FBTC",
+        "  Ecosystem / DEX    MOE",
+        "  xStocks (RWA) / Fluxion      wTSLAx, wAAPLx, wNVDAx, wGOOGLx, wMETAx,",
+        "                     wQQQx, wSPYx, wMSTRx, wHOODx, wCRCLx",
+        "  MEME / Fluxion   BSB, ELSA, VOOI, SCOR",
+        "",
+        "Notes:",
+        "  - Native MNT is NOT an ERC-20 — use `mantle-cli account balance <address>` instead.",
+        "  - Symbols are resolved against the built-in token registry; any ERC-20 address works too.",
+        "  - Sepolia testnet currently only resolves WMNT by symbol.",
+        ""
+      ].join("\n")
     )
     .action(async (address: string, opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
