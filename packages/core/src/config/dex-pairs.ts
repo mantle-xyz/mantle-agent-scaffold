@@ -14,7 +14,12 @@
  * guessing or asking the user. Pool parameters verified on-chain.
  *
  * Sources:
- * - DexScreener: https://dexscreener.com/mantle (pools with liq > $1000)
+ * - DexScreener: https://dexscreener.com/mantle — this file is kept in parity
+ *   with `dexscreener-pools.json` (whitelist-only snapshot, refreshed via
+ *   `scripts/refresh-pools.mjs`). Every pool in the snapshot MUST have a
+ *   corresponding entry here (sans low-liquidity filtering); additions beyond
+ *   the snapshot are allowed when they round out routing (e.g. sepolia or
+ *   pools DexScreener has not indexed yet).
  * - GeckoTerminal: https://www.geckoterminal.com/mantle/
  * - Merchant Moe docs: https://docs.merchantmoe.com/resources/contracts
  * - Agni Finance: https://agni.finance
@@ -26,8 +31,15 @@ import type { Network } from "../types.js";
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Merchant Moe **Liquidity Book (LB v2)** pair. These are concentrated-liquidity
+ * pools with discrete bins, parameterised by `binStep`.
+ */
 export interface MoePair {
   provider: "merchant_moe";
+  /** Discriminator (optional, defaults to "v2"). Present here so callers can
+   *  narrow `MoePair | MoeV1Pair` cleanly. */
+  poolType?: "v2";
   tokenA: string;
   tokenB: string;
   tokenAAddress: string;
@@ -46,6 +58,23 @@ export interface MoePair {
   routerVersion?: number;
 }
 
+/**
+ * Merchant Moe **classic V1 AMM** pair (Uniswap V2 clone). These predate the
+ * Liquidity Book and have no `binStep` / `version` — liquidity is a constant
+ * product x·y=k. Kept in this registry for discovery / pool-listing purposes;
+ * LB-specific code paths (getLBPositions, bin scanning) must filter them out.
+ */
+export interface MoeV1Pair {
+  provider: "merchant_moe";
+  /** Discriminator for V1 AMM pools. */
+  poolType: "v1";
+  tokenA: string;
+  tokenB: string;
+  tokenAAddress: string;
+  tokenBAddress: string;
+  pool: string;
+}
+
 export interface V3Pair {
   provider: "agni" | "fluxion";
   tokenA: string;
@@ -57,7 +86,15 @@ export interface V3Pair {
   feeTier: number;
 }
 
-export type DexPair = MoePair | V3Pair;
+export type DexPair = MoePair | MoeV1Pair | V3Pair;
+
+/**
+ * Type guard: returns true when the given Merchant Moe pair is a Liquidity Book
+ * (v2+) pool with `binStep` / `version`. False for classic V1 AMM pools.
+ */
+export function isMoeLBPair(pair: DexPair): pair is MoePair {
+  return pair.provider === "merchant_moe" && (pair as MoePair).binStep !== undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Token address constants (Mantle mainnet — whitelist-only)
@@ -232,6 +269,72 @@ const MOE_PAIRS: MoePair[] = [
     tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.cmETH,
     pool: "0xF0601AA87a7341a38034B49f9517dd3adC2DdeC4",
     binStep: 1, version: 2, routerVersion: 3
+  },
+
+  // ---- Wide-spread LB pool for WMNT/USDT0 (bin_step 100, low liq but
+  //      listed on DexScreener snapshot — keep parity with dexscreener-pools.json)
+  {
+    provider: "merchant_moe",
+    tokenA: "WMNT", tokenB: "USDT0",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
+    pool: "0x03BeafC0d25BB553fCa274301832419C05269987",
+    binStep: 100, version: 2, routerVersion: 3
+  }
+];
+
+// ---------------------------------------------------------------------------
+// Merchant Moe classic V1 AMM pairs (Uniswap V2 clone, no bin_step)
+//
+// These predate Liquidity Book and use the x*y=k constant-product formula.
+// Kept here to match the DexScreener snapshot (dexscreener-pools.json) so that
+// `findPairByAddress` / LP discovery can surface them, even though LB-only
+// code paths (getLBPositions, bin scanning) must filter them out via the
+// `poolType: "v1"` discriminator.
+// ---------------------------------------------------------------------------
+
+const MOE_V1_PAIRS: MoeV1Pair[] = [
+  // MOE/WMNT — the largest V1 pool by TVL (~$280k), token launch pair
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "MOE", tokenB: "WMNT",
+    tokenAAddress: TOKENS.MOE, tokenBAddress: TOKENS.WMNT,
+    pool: "0x763868612858358f62b05691dB82Ad35a9b3E110"
+  },
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "MOE", tokenB: "USDT",
+    tokenAAddress: TOKENS.MOE, tokenBAddress: TOKENS.USDT,
+    pool: "0x7d35BA038df5afDe64a1962683ffeB3e150637fF"
+  },
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "WETH", tokenB: "USDC",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDC,
+    pool: "0x33B1d7CfFf71BBa9DD987f96AD57e0A5f7Db9Ac5"
+  },
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "cmETH", tokenB: "WMNT",
+    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.WMNT,
+    pool: "0xF032B07539965C12B2E76b5cFbE13cCBDa23e866"
+  },
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "USDe", tokenB: "WMNT",
+    tokenAAddress: TOKENS.USDe, tokenBAddress: TOKENS.WMNT,
+    pool: "0x43dB0Df8547b97A14a2B2Ff686aD9Ab0559CC1F0"
+  },
+  {
+    provider: "merchant_moe",
+    poolType: "v1",
+    tokenA: "FBTC", tokenB: "WMNT",
+    tokenAAddress: TOKENS.FBTC, tokenBAddress: TOKENS.WMNT,
+    pool: "0xE9bC0589974b779661A1C4ceDA5b0bEe8d9cEDA5"
   }
 ];
 
@@ -343,6 +446,66 @@ const AGNI_PAIRS: V3Pair[] = [
     tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.WMNT,
     pool: "0x9Ec313FF05946b6f3860A99B470625aBba7Eb0a2",
     feeTier: 2500 // 0.25%
+  },
+
+  // ---- Additional lower-liquidity Agni pools tracked in the DexScreener
+  //      snapshot. Kept here so the static registry stays in parity with
+  //      dexscreener-pools.json; multi-hop routing may still pick these up.
+  {
+    provider: "agni",
+    tokenA: "WMNT", tokenB: "USDT",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT,
+    pool: "0xCB893a28933A89B5C4EE3D02CA37524D3d0bFc97",
+    feeTier: 10000 // 1%
+  },
+  {
+    provider: "agni",
+    tokenA: "WMNT", tokenB: "USDC",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
+    pool: "0x9Cae9b5D0eE7E78dfd7E42Fd995d4974d6907242",
+    feeTier: 2500 // 0.25%
+  },
+  {
+    provider: "agni",
+    tokenA: "WMNT", tokenB: "USDC",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
+    pool: "0x7b3A4b36b0C5c95142AFCD1b883ed055AA166f85",
+    feeTier: 100 // 0.01%
+  },
+  {
+    provider: "agni",
+    tokenA: "WETH", tokenB: "USDT",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDT,
+    pool: "0x425732f412F2A922156cF3C135a516c18F977Cc1",
+    feeTier: 2500 // 0.25%
+  },
+  {
+    provider: "agni",
+    tokenA: "WETH", tokenB: "USDC",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDC,
+    pool: "0xd34292F7585aC5A518c5cEb2d674d1423Ad0569F",
+    feeTier: 2500 // 0.25%
+  },
+  {
+    provider: "agni",
+    tokenA: "WETH", tokenB: "USDC",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDC,
+    pool: "0xEe12e312878B74b2C17D80516128D7868f80365B",
+    feeTier: 500 // 0.05%
+  },
+  {
+    provider: "agni",
+    tokenA: "cmETH", tokenB: "WMNT",
+    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.WMNT,
+    pool: "0x8be9c0a3e81f63cC0592302367FC673e6840Fa55",
+    feeTier: 2500 // 0.25%
+  },
+  {
+    provider: "agni",
+    tokenA: "cmETH", tokenB: "WMNT",
+    tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.WMNT,
+    pool: "0x8B4d24365D08055fD4220eF87492020ac54D0128",
+    feeTier: 500 // 0.05%
   }
 ];
 
@@ -437,6 +600,23 @@ const FLUXION_PAIRS: V3Pair[] = [
     feeTier: 3000
   },
 
+  // ---- Stablecoin & governance-token Fluxion pools from the DexScreener
+  //      snapshot (lower liquidity; kept for registry parity) ----
+  {
+    provider: "fluxion",
+    tokenA: "USDT0", tokenB: "USDC",
+    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.USDC,
+    pool: "0x76844372B34442F55E5B973699DC9899BdF8b909",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDT0", tokenB: "SCOR",
+    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.SCOR,
+    pool: "0x8442048774eee4eBF19ceC3C07154ec338978180",
+    feeTier: 3000
+  },
+
   // ---- xStocks RWA pairs (USDC / wTicker, fee_tier 3000 = 0.3%) ----
   {
     provider: "fluxion",
@@ -500,7 +680,7 @@ const FLUXION_PAIRS: V3Pair[] = [
 // Registry (mainnet only for now)
 // ---------------------------------------------------------------------------
 
-const ALL_PAIRS: DexPair[] = [...MOE_PAIRS, ...AGNI_PAIRS, ...FLUXION_PAIRS];
+const ALL_PAIRS: DexPair[] = [...MOE_PAIRS, ...MOE_V1_PAIRS, ...AGNI_PAIRS, ...FLUXION_PAIRS];
 
 type Provider = "merchant_moe" | "agni" | "fluxion";
 

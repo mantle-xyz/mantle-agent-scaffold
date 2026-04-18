@@ -4565,7 +4565,9 @@ export async function getSwapPairs(
         tokenB: p.tokenB,
         pool: p.pool,
         ...(p.provider === "merchant_moe"
-          ? { bin_step: (p as MoePair).binStep, version: (p as MoePair).version }
+          ? "binStep" in p
+            ? { bin_step: (p as MoePair).binStep, version: (p as MoePair).version }
+            : { pool_type: "v1" as const }
           : { fee_tier: (p as V3Pair).feeTier })
       })),
       count: pairs.length
@@ -4582,7 +4584,9 @@ export async function getSwapPairs(
       tokenB: p.tokenB,
       pool: p.pool,
       ...(p.provider === "merchant_moe"
-        ? { bin_step: (p as MoePair).binStep }
+        ? "binStep" in p
+          ? { bin_step: (p as MoePair).binStep }
+          : { pool_type: "v1" as const }
         : { fee_tier: (p as V3Pair).feeTier })
     });
   }

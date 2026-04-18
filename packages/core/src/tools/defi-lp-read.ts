@@ -26,7 +26,7 @@ import {
   LB_PAIR_ABI,
   LB_FACTORY_ABI
 } from "../lib/abis/merchant-moe-lb.js";
-import { listPairs, listAllPairs, TOKENS as DEX_TOKENS, type MoePair, type V3Pair, type DexPair } from "../config/dex-pairs.js";
+import { listPairs, listAllPairs, isMoeLBPair, TOKENS as DEX_TOKENS, type MoePair, type V3Pair, type DexPair } from "../config/dex-pairs.js";
 import { MANTLE_TOKENS } from "../config/tokens.js";
 import dexscreenerPoolsSnapshot from "../config/dexscreener-pools.json" with { type: "json" };
 
@@ -1551,12 +1551,15 @@ function scanPairsFromSnapshot(
     seen.add(poolLc);
 
     const isV3 = pair.provider === "agni" || pair.provider === "fluxion";
+    const isV1Moe = pair.provider === "merchant_moe" && !isMoeLBPair(pair);
     pools.push({
       provider: pair.provider,
       pool_address: pair.pool,
       ...(isV3
         ? { fee_tier: (pair as { feeTier: number }).feeTier }
-        : { bin_step: (pair as { binStep: number }).binStep }),
+        : isV1Moe
+          ? {} // classic V1 AMM — no binStep / fee_tier to expose
+          : { bin_step: (pair as { binStep: number }).binStep }),
       // No liquidity info in the static registry. Report 0 but keep
       // has_liquidity=true so downstream DexScreener enrichment still
       // runs and may fill in tvl_usd/volume_24h_usd.
@@ -2609,7 +2612,8 @@ export interface LBPositionDeps {
 
 const defaultLBDeps: LBPositionDeps = {
   getClient: getPublicClient,
-  listMoePairs: () => listPairs("merchant_moe") as MoePair[],
+  // LB-specific: exclude Merchant Moe V1 AMM pools (they don't have bins).
+  listMoePairs: () => listPairs("merchant_moe").filter(isMoeLBPair),
   resolveToken: resolveTokenInfo,
   now: nowUtc
 };
