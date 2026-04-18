@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildApprove,
   buildSwap,
   buildAddLiquidity
 } from "@mantleio/mantle-core/tools/defi-write.js";
@@ -352,6 +353,265 @@ describe("buildAddLiquidity INSUFFICIENT_ALLOWANCE throw path", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(MantleMcpError);
       expect((err as MantleMcpError).code).toBe("POOL_NOT_FOUND");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildApprove: INSUFFICIENT_BALANCE pre-check
+//
+// When the owner's on-chain balance is smaller than the approve amount, the
+// agent must refuse to build the approve. A "successful" approve with no
+// backing balance always leads to a reverting transferFrom downstream and a
+// dangling non-zero allowance — both of which the agent is trying to avoid.
+// ---------------------------------------------------------------------------
+
+// Agni SwapRouter — whitelisted spender so buildApprove does not reject on
+// SPENDER_NOT_WHITELISTED before reaching the balance check.
+const AGNI_ROUTER = "0x319B69888b0d11cEC22caA5034e25FfFBDc88421";
+
+describe("buildApprove INSUFFICIENT_BALANCE throw path", () => {
+  it("throws MantleMcpError when owner balance < requested approve amount", async () => {
+    try {
+      await buildApprove(
+        {
+          token: "USDC",
+          spender: AGNI_ROUTER,
+          amount: "100",
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            // First read = allowance (0 — insufficient, so skip does not fire),
+            // second read = balance (10 USDC raw — insufficient vs 100 required).
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            readContract: async ({ functionName }: { functionName: string }) => {
+              if (functionName === "allowance") return 0n;
+              if (functionName === "balanceOf") return 10_000000n;
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-18T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected buildApprove to throw INSUFFICIENT_BALANCE");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.token).toBe("USDC");
+      expect(meta.owner).toBe(OWNER);
+      expect(meta.required).toBe("100");
+      expect(meta.current_balance).toBe("10");
+      expect(meta.spender).toBe(AGNI_ROUTER);
+    }
+  });
+
+  it("does NOT throw when balance >= amount (and allowance is 0 — tx is built)", async () => {
+    const result = await buildApprove(
+      {
+        token: "USDC",
+        spender: AGNI_ROUTER,
+        amount: "100",
+        owner: OWNER,
+        network: "mainnet"
+      },
+      {
+        resolveTokenInput: async (input: string) => mapToken(input),
+        getClient: () => ({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          readContract: async ({ functionName }: { functionName: string }) => {
+            if (functionName === "allowance") return 0n;
+            if (functionName === "balanceOf") return 500_000000n; // 500 USDC
+            return 0n;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+        now: () => "2026-04-18T00:00:00.000Z",
+        deadline: () => 1_800_000_000n
+      }
+    );
+    // A real approve tx is built (not a skip) and calldata is populated.
+    expect(result.intent).toBe("approve");
+    expect(result.unsigned_tx.data).not.toBe("0x");
+  });
+
+  it("is exempt when amount='max' — unlimited pre-approval is intentional, balance 0 is fine", async () => {
+    // "max" is a deliberate forward-looking approval (e.g. reusing the same
+    // allowance for future top-ups). We refuse to gate it on current balance.
+    const result = await buildApprove(
+      {
+        token: "USDC",
+        spender: AGNI_ROUTER,
+        amount: "max",
+        owner: OWNER,
+        network: "mainnet"
+      },
+      {
+        resolveTokenInput: async (input: string) => mapToken(input),
+        getClient: () => ({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          readContract: async ({ functionName }: { functionName: string }) => {
+            if (functionName === "allowance") return 0n;
+            if (functionName === "balanceOf") return 0n; // zero balance
+            return 0n;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+        now: () => "2026-04-18T00:00:00.000Z",
+        deadline: () => 1_800_000_000n
+      }
+    );
+    expect(result.intent).toBe("approve");
+    // unlimited approvals surface a generic security warning — assert it's present
+    expect(result.warnings.some(w => w.toLowerCase().includes("unlimited"))).toBe(true);
+  });
+
+  it("is skipped when owner is omitted — cannot read balance, so cannot block", async () => {
+    // Matches the allowance-check-skipped semantics: no owner → no pre-checks.
+    const result = await buildApprove(
+      {
+        token: "USDC",
+        spender: AGNI_ROUTER,
+        amount: "100",
+        network: "mainnet"
+        // no `owner`
+      },
+      {
+        resolveTokenInput: async (input: string) => mapToken(input),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getClient: () => ({ readContract: async () => 0n }) as any,
+        now: () => "2026-04-18T00:00:00.000Z",
+        deadline: () => 1_800_000_000n
+      }
+    );
+    expect(result.intent).toBe("approve");
+  });
+
+  it("does NOT leak INSUFFICIENT_BALANCE when the balanceOf RPC read rejects (best-effort)", async () => {
+    // Same failure-mode principle as the allowance check: if we cannot
+    // prove insufficiency, we do not block. The downstream tx may still
+    // revert — that is explicitly accepted as the less-bad outcome vs.
+    // refusing operations during an RPC outage.
+    let sawInsufficientBalance = false;
+    try {
+      await buildApprove(
+        {
+          token: "USDC",
+          spender: AGNI_ROUTER,
+          amount: "100",
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            readContract: async ({ functionName }: { functionName: string }) => {
+              if (functionName === "allowance") return 0n;
+              if (functionName === "balanceOf") throw new Error("rpc down");
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-18T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+    } catch (err) {
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_BALANCE") {
+        sawInsufficientBalance = true;
+      }
+    }
+    expect(sawInsufficientBalance).toBe(false);
+  });
+
+  it("still throws INSUFFICIENT_BALANCE when the allowance RPC read rejects but balanceOf proves insufficiency", async () => {
+    // Core value of Promise.allSettled in this builder: the two reads are
+    // independent. If the allowance read rejects (e.g. non-standard ERC-20,
+    // transient RPC glitch) but balanceOf fulfills and clearly shows the
+    // owner cannot afford the approve, we MUST still throw. Otherwise a
+    // flaky allowance endpoint would silently reopen the exact failure path
+    // this patch is designed to close.
+    try {
+      await buildApprove(
+        {
+          token: "USDC",
+          spender: AGNI_ROUTER,
+          amount: "100",
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            readContract: async ({ functionName }: { functionName: string }) => {
+              if (functionName === "allowance") throw new Error("allowance rpc down");
+              if (functionName === "balanceOf") return 10_000000n; // 10 USDC (< 100 required)
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-18T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected INSUFFICIENT_BALANCE despite allowance RPC rejection");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      const e = err as MantleMcpError;
+      expect(e.code).toBe("INSUFFICIENT_BALANCE");
+      const meta = e.details as Record<string, unknown>;
+      expect(meta.current_balance).toBe("10");
+      expect(meta.required).toBe("100");
+      // And the suggestion points to the correct ERC-20 read tool.
+      expect(e.suggestion).toContain("mantle_getTokenBalances");
+    }
+  });
+
+  it("prefers INSUFFICIENT_BALANCE over approve_skip when allowance is already sufficient but balance is short", async () => {
+    // Subtle case: the user already has a huge allowance (e.g. from a past
+    // unlimited approve) but only 10 USDC on-hand. They then ask the agent
+    // to approve 100 USDC. The pre-PR behavior would return approve_skip
+    // ("nothing to do") — masking that the user cannot actually execute the
+    // follow-up operation. We now throw so the agent surfaces the real issue.
+    try {
+      await buildApprove(
+        {
+          token: "USDC",
+          spender: AGNI_ROUTER,
+          amount: "100",
+          owner: OWNER,
+          network: "mainnet"
+        },
+        {
+          resolveTokenInput: async (input: string) => mapToken(input),
+          getClient: () => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            readContract: async ({ functionName }: { functionName: string }) => {
+              // already-unlimited allowance
+              if (functionName === "allowance") {
+                return BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+              }
+              if (functionName === "balanceOf") return 10_000000n;
+              return 0n;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          now: () => "2026-04-18T00:00:00.000Z",
+          deadline: () => 1_800_000_000n
+        }
+      );
+      throw new Error("expected INSUFFICIENT_BALANCE (balance trumps skip)");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MantleMcpError);
+      expect((err as MantleMcpError).code).toBe("INSUFFICIENT_BALANCE");
     }
   });
 });

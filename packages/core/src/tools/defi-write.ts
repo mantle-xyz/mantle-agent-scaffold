@@ -1174,23 +1174,102 @@ export async function buildApprove(
     );
   }
 
-  // Pre-check existing allowance (if owner is provided)
+  // Pre-check existing allowance + balance (if owner is provided).
+  //
+  // Balance check rationale: if the agent is building an approve because the
+  // user wants to eventually spend `amountRaw` of this token, but the owner
+  // does NOT hold that much, then the subsequent transferFrom/swap/add-
+  // liquidity WILL revert — and the approve itself is pure waste (gas cost,
+  // on-chain footprint, and a dangling allowance). Fail-closed here so the
+  // agent never signs a doomed approve on the user's behalf.
+  //
+  // Skipped when:
+  //   - no owner was provided (we cannot read balance)
+  //   - amount is MAX_UINT256 ("max"/"unlimited") — the user is explicitly
+  //     pre-approving future balances, so balance == 0 is not necessarily a
+  //     mistake. We still emit a soft warning downstream.
   const owner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
     ? getAddress(args.owner)
     : null;
   let existingAllowance: bigint | null = null;
+  let ownerBalance: bigint | null = null;
   if (owner) {
     try {
       const client = d.getClient(network);
-      existingAllowance = (await client.readContract({
-        address: resolved.address as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: "allowance",
-        args: [owner as `0x${string}`, spender as `0x${string}`]
-      })) as bigint;
+      // Batch the two reads. `allSettled` so a non-standard-ERC20 rejecting
+      // one call does not mask a known-insufficient result from the other.
+      const settled = await Promise.allSettled([
+        client.readContract({
+          address: resolved.address as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "allowance",
+          args: [owner as `0x${string}`, spender as `0x${string}`]
+        }) as Promise<bigint>,
+        client.readContract({
+          address: resolved.address as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [owner as `0x${string}`]
+        }) as Promise<bigint>
+      ]);
+      if (settled[0].status === "fulfilled") {
+        existingAllowance = settled[0].value;
+      }
+      if (settled[1].status === "fulfilled") {
+        ownerBalance = settled[1].value;
+      }
+      // Intentional fail-open policy: if either RPC read rejected, the
+      // corresponding variable stays `null` and that specific pre-check is
+      // silently skipped. This matches the existing allowance-read behavior
+      // in buildSwap (~L1717) and buildAddLiquidity (~L2531) — an RPC outage
+      // should not block the user's operation outright.
     } catch {
-      // Allowance check failed — proceed without it
+      // Defensive catch for synchronous failures in `d.getClient(network)`.
+      // `Promise.allSettled` itself never rejects, so per-call rejection
+      // paths are already handled above — this branch is effectively
+      // unreachable under the current dependency contract but is kept as a
+      // belt-and-suspenders guard against future refactors of getClient.
     }
+  }
+
+  // Blocking balance pre-check.
+  //
+  // If the owner demonstrably holds less than the approve amount, we refuse
+  // to build the approve. This prevents the common agent failure mode where
+  // the user asks to swap/transfer N tokens, the agent auto-approves N
+  // without verifying the user can actually pay, and then the follow-up
+  // transferFrom reverts — leaving a useless non-zero allowance behind.
+  //
+  // Only runs for concrete (non-max) amounts and when we successfully read
+  // the balance. MAX_UINT256 approvals are intentionally exempt.
+  if (
+    owner &&
+    amountRaw !== MAX_UINT256 &&
+    ownerBalance !== null &&
+    ownerBalance < amountRaw
+  ) {
+    const balanceDecimal = formatUnits(ownerBalance, resolved.decimals);
+    const requiredDecimal = formatUnits(amountRaw, resolved.decimals);
+    throw new MantleMcpError(
+      "INSUFFICIENT_BALANCE",
+      `${resolved.symbol} balance for ${owner} is ${balanceDecimal}, ` +
+      `but the requested approve amount is ${requiredDecimal}. ` +
+      `Approving more than the owner holds is wasteful — any follow-up ` +
+      `transferFrom/swap would revert on-chain.`,
+      `Lower the amount to at most ${balanceDecimal} ${resolved.symbol}, ` +
+      `or fund ${owner} with additional ${resolved.symbol} before retrying. ` +
+      `Use mantle_getTokenBalances({ address: "${owner}", tokens: ["${resolved.symbol}"], network: "${network}" }) ` +
+      `to confirm the current on-chain ERC-20 balance ` +
+      `(note: mantle_getBalance only reads native MNT).`,
+      {
+        token: resolved.symbol,
+        token_address: resolved.address,
+        owner,
+        required: requiredDecimal,
+        current_balance: balanceDecimal,
+        spender
+      }
+    );
   }
 
   // If allowance is already sufficient, skip
