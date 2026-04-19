@@ -472,6 +472,99 @@ function requirePositiveAmount(
   return parsed;
 }
 
+type SlippageProtectionEcho = {
+  input_raw_or_decimal: string;
+  resolved_raw: string;
+  resolved_decimal: string;
+  token_out_decimals: number;
+};
+
+/**
+ * Parse the `amount_out_min` / `--minimum-out` argument.
+ *
+ * Accepts two formats so the Agent never needs to hand-roll unit conversion:
+ *   • Decimal string (contains ".")  → parseUnits(str, decimals)  [BigInt-safe]
+ *   • Raw integer string (digits only) → BigInt(str)              [as before]
+ *
+ * Fails loudly with INVALID_AMOUNT_FORMAT and a hint pointing to
+ * `minimum_out_raw` in the swap-quote output if neither format parses.
+ *
+ * Rejects decimal precision exceeding token decimals (never silently truncates).
+ */
+function parseAmountOutMin(
+  input: string,
+  tokenOutDecimals: number,
+  tokenOutSymbol: string
+): { raw: bigint; echo: SlippageProtectionEcho } {
+  const trimmed = input.trim();
+
+  if (trimmed.includes(".")) {
+    // Decimal format — use parseUnits (BigInt-safe, no float64 rounding)
+    const dotIdx = trimmed.indexOf(".");
+    const fracPart = trimmed.slice(dotIdx + 1);
+    if (fracPart.length > tokenOutDecimals) {
+      throw new MantleMcpError(
+        "INVALID_AMOUNT_FORMAT",
+        `--minimum-out decimal precision (${fracPart.length} places) exceeds ${tokenOutSymbol} decimals (${tokenOutDecimals}).`,
+        `Use at most ${tokenOutDecimals} decimal places, or copy 'minimum_out_raw' from swap-quote output directly (no conversion needed).`,
+        { input: trimmed, token_out_decimals: tokenOutDecimals }
+      );
+    }
+    let raw: bigint;
+    try {
+      raw = parseUnits(trimmed, tokenOutDecimals);
+    } catch {
+      throw new MantleMcpError(
+        "INVALID_AMOUNT_FORMAT",
+        `--minimum-out received '${trimmed}' which could not be parsed as a decimal amount.`,
+        `Expected: raw integer (e.g., 212195471425023) OR decimal string (e.g., 0.000212195). Copy the 'minimum_out_raw' field from swap-quote output directly.`,
+        { input: trimmed, token_out_decimals: tokenOutDecimals }
+      );
+    }
+    return {
+      raw,
+      echo: {
+        input_raw_or_decimal: trimmed,
+        resolved_raw: raw.toString(),
+        resolved_decimal: trimmed,
+        token_out_decimals: tokenOutDecimals
+      }
+    };
+  }
+
+  // Raw integer format — validate purely digits before calling BigInt()
+  if (!/^\d+$/.test(trimmed)) {
+    throw new MantleMcpError(
+      "INVALID_AMOUNT_FORMAT",
+      `--minimum-out received '${trimmed}' which could not be parsed.`,
+      `Expected: raw integer (e.g., 212195471425023) OR decimal string (e.g., 0.000212195471425023). Copy the 'minimum_out_raw' field from swap-quote output directly.`,
+      { input: trimmed, token_out_decimals: tokenOutDecimals }
+    );
+  }
+
+  let raw: bigint;
+  try {
+    raw = BigInt(trimmed);
+  } catch {
+    throw new MantleMcpError(
+      "INVALID_AMOUNT_FORMAT",
+      `--minimum-out received '${trimmed}' which could not be converted to a BigInt.`,
+      `Expected: raw integer (e.g., 212195471425023) OR decimal string (e.g., 0.000212195471425023). Copy the 'minimum_out_raw' field from swap-quote output directly.`,
+      { input: trimmed, token_out_decimals: tokenOutDecimals }
+    );
+  }
+
+  return {
+    raw,
+    echo: {
+      input_raw_or_decimal: trimmed,
+      resolved_raw: trimmed,
+      resolved_decimal: formatUnits(raw, tokenOutDecimals),
+      token_out_decimals: tokenOutDecimals
+    }
+  };
+}
+
 type DexProvider = "agni" | "fluxion" | "merchant_moe";
 
 function requireProvider(input: unknown): DexProvider {
@@ -1192,6 +1285,17 @@ interface BuilderUnsignedTxResult
     maxPriorityFeePerGas?: string;
     nonce?: number;
   };
+  /**
+   * Echo field confirming how --minimum-out / amount_out_min was interpreted.
+   * Lets the agent (and humans) verify the raw value without manual unit math.
+   * Only present when a non-zero amount_out_min was resolved.
+   */
+  slippage_protection?: {
+    input_raw_or_decimal: string;
+    resolved_raw: string;
+    resolved_decimal: string;
+    token_out_decimals: number;
+  };
 }
 
 // =========================================================================
@@ -1784,15 +1888,21 @@ export async function buildSwap(
   // protection, which is vulnerable to sandwich attacks and MEV extraction.
   const allowZeroMin = args.allow_zero_min === true || args.allow_zero_min === "true";
   let amountOutMin: bigint;
+  let slippageProtectionEcho: SlippageProtectionEcho | undefined;
   if (typeof args.amount_out_min === "string" && args.amount_out_min !== "0" && args.amount_out_min.trim().length > 0) {
-    amountOutMin = BigInt(args.amount_out_min);
+    // Supports both raw integer (e.g. "212195471425023") and decimal string
+    // (e.g. "0.000212195471425023") so the Agent can copy either field from
+    // swap-quote output without any manual unit conversion.
+    const parsed = parseAmountOutMin(args.amount_out_min, tokenOut.decimals, tokenOut.symbol);
+    amountOutMin = parsed.raw;
+    slippageProtectionEcho = parsed.echo;
   } else if (allowZeroMin) {
     amountOutMin = 0n;
   } else {
     throw new MantleMcpError(
       "MISSING_SLIPPAGE_PROTECTION",
       "amount_out_min is required to protect against slippage and sandwich attacks.",
-      "Call mantle_getSwapQuote first to get a quote, then pass amount_out_min (or minimum_out_raw from the quote). " +
+      "Call mantle_getSwapQuote first to get a quote, then pass --minimum-out (or amount_out_min) using the 'minimum_out_raw' value from the quote. " +
       "Set allow_zero_min=true only if you understand the risks of unprotected swaps.",
       { token_in: tokenIn.symbol, token_out: tokenOut.symbol, amount_in: args.amount_in }
     );
@@ -1901,6 +2011,7 @@ export async function buildSwap(
         now: d.now()
       });
       result.warnings.push(...swapWarnings);
+      if (slippageProtectionEcho) result.slippage_protection = slippageProtectionEcho;
       return result;
     }
 
@@ -1932,6 +2043,7 @@ export async function buildSwap(
         now: d.now()
       });
       result.warnings.push(...swapWarnings);
+      if (slippageProtectionEcho) result.slippage_protection = slippageProtectionEcho;
       return result;
     }
 
@@ -1994,6 +2106,7 @@ export async function buildSwap(
       now: d.now()
     });
     moeResult.warnings.push(...swapWarnings);
+    if (slippageProtectionEcho) moeResult.slippage_protection = slippageProtectionEcho;
     return moeResult;
   }
 
@@ -2040,6 +2153,7 @@ export async function buildSwap(
     }
 
     result.warnings.push(...swapWarnings);
+    if (slippageProtectionEcho) result.slippage_protection = slippageProtectionEcho;
     return result;
   }
 
