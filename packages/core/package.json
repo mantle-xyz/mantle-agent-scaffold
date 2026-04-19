@@ -1,6 +1,6 @@
 {
   "name": "@mantleio/mantle-core",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "license": "MIT",
   "description": "Core business logic for Mantle L2 — chain reads, DeFi queries, and unsigned transaction building",
   "type": "module",

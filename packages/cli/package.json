@@ -1,6 +1,6 @@
 {
   "name": "@mantleio/mantle-cli",
-  "version": "0.1.11",
+  "version": "0.1.18",
   "license": "MIT",
   "description": "CLI for Mantle L2 chain reads, DeFi queries, swaps, LP, and Aave operations",
   "type": "module",

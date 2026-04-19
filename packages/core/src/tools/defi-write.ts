@@ -893,6 +893,91 @@ function wrapBuildHandler(
       // now pinned and the tx is signable as-is.
       result.is_broadcastable = true;
 
+      // ------------------------------------------------------------------
+      // Zero-transform signing payload.
+      //
+      // Agents consuming `unsigned_tx` directly have to rewrite `chainId`
+      // and `nonce` from integers to `0x`-prefixed hex strings before
+      // handing the tx to signers like Privy, and separately patch in a
+      // `from` field. That manual re-encoding was the root cause of the
+      // ~10 signature-format retries seen in the V3 benchmark run (and
+      // violates the Safety Card rule against modifying build output).
+      //
+      // We emit `signable_tx` with those exact transforms applied once,
+      // server-side, so agents can pipe it verbatim into the signer.
+      // Every other field is copied as-is — in particular `gas`,
+      // `maxFeePerGas`, `maxPriorityFeePerGas` are already hex strings
+      // from the pinning step above, so no re-serialization is needed.
+      //
+      // Invariants at this point: `sender` is non-null (MISSING_SIGNER
+      // was thrown above if missing), `nonce` is a number, `chainId` is
+      // a number. Fee fields may be absent if the chain has no
+      // baseFeePerGas — we copy through the same undefined-ness.
+      //
+      // If any deterministic field is unexpectedly missing (shouldn't
+      // happen with `is_broadcastable: true`, but be defensive against
+      // upstream regressions), we skip `signable_tx` rather than emit a
+      // half-populated payload that would silently wedge signers.
+      // ------------------------------------------------------------------
+      const utx = result.unsigned_tx;
+      if (
+        typeof sender === "string" &&
+        typeof utx.chainId === "number" &&
+        typeof utx.nonce === "number" &&
+        typeof utx.gas === "string"
+      ) {
+        const signableTx: {
+          from: string;
+          to: string;
+          data: string;
+          value: string;
+          chainId: string;
+          gas: string;
+          maxFeePerGas?: string;
+          maxPriorityFeePerGas?: string;
+          nonce: string;
+        } = {
+          // Checksummed EIP-55 form. `sender` is lowercase because it
+          // backs the idempotency key (which needs format-invariant
+          // dedupe), but `signable_tx.from` is an external-facing field
+          // consumed by signers — some strict signers validate EIP-55
+          // checksum, and checksummed is a lossless superset accepted by
+          // all lowercase consumers.
+          from: getAddress(sender),
+          to: utx.to,
+          data: utx.data,
+          value: utx.value,
+          chainId: "0x" + utx.chainId.toString(16),
+          gas: utx.gas,
+          nonce: "0x" + utx.nonce.toString(16),
+        };
+        if (typeof utx.maxFeePerGas === "string") {
+          signableTx.maxFeePerGas = utx.maxFeePerGas;
+        }
+        if (typeof utx.maxPriorityFeePerGas === "string") {
+          signableTx.maxPriorityFeePerGas = utx.maxPriorityFeePerGas;
+        }
+        result.signable_tx = signableTx;
+      } else {
+        // Defensive guard fired: `is_broadcastable` was already set to
+        // `true` above, but one of the deterministic fields isn't the
+        // expected type (upstream regression). Emit a warning so
+        // operators can detect the invariant violation instead of
+        // silently handing agents a broadcastable result with no
+        // `signable_tx` — which would reproduce the very retry loop
+        // this field exists to eliminate.
+        result.warnings = Array.isArray(result.warnings) ? result.warnings : [];
+        result.warnings.push(
+          "signable_tx omitted: upstream builder failed to populate chainId/nonce/gas on a broadcastable result (defensive guard)"
+        );
+      }
+
+      // Note: `signable_tx` is a derived view of `unsigned_tx`, so it
+      // does NOT participate in the idempotency key below. Two rebuilds
+      // that produce identical `unsigned_tx` also produce identical
+      // `signable_tx`; including it in the hash would be redundant and
+      // would couple the key format to the external signing schema.
+
       // Finding 2: include the pinned nonce in the idempotency key. Once
       // the builder pins nonce into unsigned_tx, two rebuilds that see
       // different pending nonces (e.g. because an unrelated wallet tx
@@ -981,6 +1066,73 @@ interface UnsignedTxResult {
      * distinct transaction.
      */
     nonce: number;
+  };
+  /**
+   * Zero-transform signing payload, shaped for EIP-1193 JSON-RPC signers
+   * (`eth_signTransaction` via `provider.request(...)`) — in particular
+   * the Privy Agent `sign evm-transaction` tool, which is the signer
+   * this field was designed against and empirically validated against
+   * in V3 benchmark logs.
+   *
+   * Semantically identical to `unsigned_tx`, but with every field
+   * already in the shape that stricter EIP-1193 signers demand:
+   *
+   *   - `chainId` / `nonce` are `0x`-prefixed hex strings, per the
+   *     Ethereum JSON-RPC QUANTITY encoding (EIP-1474: most-compact
+   *     hex, single-nibble values like `"0x7"` are spec-correct; zero
+   *     is represented as `"0x0"`).
+   *   - `from` is populated with the resolved signer address in
+   *     checksummed EIP-55 form. Note: for EIP-1559 (type-0x02)
+   *     transactions, `from` is NOT part of the signed payload — it
+   *     is recovered from the signature via ecrecover. The field is
+   *     supplied here as a wallet-selection hint for signers that
+   *     need to know which key to use (Privy), and is harmless for
+   *     signers that ignore it. Strict JSON-RPC nodes may drop it.
+   *   - `to` / `data` / `value` / `gas` / `maxFeePerGas` /
+   *     `maxPriorityFeePerGas` are the SAME hex strings as in
+   *     `unsigned_tx` (no re-encoding — byte-for-byte identical).
+   *
+   * **NOT the shape Privy's REST API uses directly.** Privy's REST
+   * `eth_signTransaction` endpoint takes `chain_id`, `gas_limit`,
+   * snake_case fee fields, and integer `nonce`/`chain_id`. Agents
+   * calling Privy's REST API raw will need to transform `signable_tx`
+   * further; agents calling `sign evm-transaction` via the Privy
+   * Agent tool (the V3-validated path) can pipe `signable_tx`
+   * verbatim.
+   *
+   * Why it exists: agents consuming `unsigned_tx` directly had to run
+   * ad-hoc Python/JS to convert `chainId: 5000` → `"0x1388"` and
+   * `nonce: 198` → `"0xc6"` before handing the tx to the signing tool,
+   * which (a) is error-prone (observed ~10 format-retry failures in V3
+   * logs) and (b) violates the Safety Card "do not modify unsigned_tx
+   * fields" rule. Consuming `signable_tx` directly is a drop-in
+   * substitute that preserves the determinism contract.
+   *
+   * Typically present on every broadcastable result. In the rare case
+   * that an upstream builder regression produces an `is_broadcastable:
+   * true` result with a missing/wrong-typed `chainId` / `nonce` / `gas`
+   * field, `signable_tx` is omitted and a diagnostic string is pushed
+   * to `warnings`. Callers MUST null-check before use even when
+   * `is_broadcastable === true`. Skip results (`_skip` intents) never
+   * carry `signable_tx` — there is nothing to sign.
+   */
+  signable_tx?: {
+    /**
+     * Resolved signer address (sender / owner / on_behalf_of), in
+     * checksummed EIP-55 form. Treated as a wallet-selection hint by
+     * Privy-style signers; not part of the EIP-1559 signed payload.
+     */
+    from: string;
+    to: string;
+    data: string;
+    value: string;
+    /** Hex-encoded chain ID (JSON-RPC QUANTITY), e.g. `"0x1388"` for Mantle mainnet (5000). */
+    chainId: string;
+    gas: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
+    /** Hex-encoded nonce (JSON-RPC QUANTITY), e.g. `"0xc6"` for 198, `"0x7"` for 7, `"0x0"` for 0. */
+    nonce: string;
   };
   /**
    * Deterministic, signer-scoped hash for deduplication.
@@ -1176,18 +1328,17 @@ export async function buildApprove(
 
   // Pre-check existing allowance + balance (if owner is provided).
   //
-  // Balance check rationale: if the agent is building an approve because the
-  // user wants to eventually spend `amountRaw` of this token, but the owner
-  // does NOT hold that much, then the subsequent transferFrom/swap/add-
-  // liquidity WILL revert — and the approve itself is pure waste (gas cost,
-  // on-chain footprint, and a dangling allowance). Fail-closed here so the
-  // agent never signs a doomed approve on the user's behalf.
+  // Reads allowance + balanceOf in parallel. Allowance is used for the
+  // approve_skip optimisation; balance is used for the advisory balance
+  // warning (see the "Advisory balance pre-check" block below). Both reads
+  // are best-effort via Promise.allSettled — an RPC failure on either leaves
+  // the corresponding variable null and silently skips that check.
   //
-  // Skipped when:
-  //   - no owner was provided (we cannot read balance)
-  //   - amount is MAX_UINT256 ("max"/"unlimited") — the user is explicitly
-  //     pre-approving future balances, so balance == 0 is not necessarily a
-  //     mistake. We still emit a soft warning downstream.
+  // Skipped entirely when:
+  //   - no owner was provided (we cannot read balance or allowance)
+  //   - amount is MAX_UINT256 ("max"/"unlimited") — forward approvals
+  //     are intentional; balance == 0 is not an error. A soft unlimited-
+  //     approval warning is emitted downstream instead.
   const owner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
     ? getAddress(args.owner)
     : null;
@@ -1232,16 +1383,23 @@ export async function buildApprove(
     }
   }
 
-  // Blocking balance pre-check.
+  // Advisory balance pre-check.
   //
-  // If the owner demonstrably holds less than the approve amount, we refuse
-  // to build the approve. This prevents the common agent failure mode where
-  // the user asks to swap/transfer N tokens, the agent auto-approves N
-  // without verifying the user can actually pay, and then the follow-up
-  // transferFrom reverts — leaving a useless non-zero allowance behind.
+  // ERC-20 approve() has NO on-chain requirement that amount ≤ balance —
+  // the standard only checks balance at transferFrom() time. Pre-approving
+  // more than the current balance is a legitimate and common pattern:
+  //   • Infinite / forward approvals (type(uint256).max)
+  //   • Approve-then-fund flows (approve first, top up wallet later)
+  //   • Round-number approvals slightly above current balance
+  //
+  // We emit a non-blocking warning so the agent can surface it, but we do
+  // NOT refuse to build the transaction. The chain is the final arbiter;
+  // a transferFrom with insufficient balance will revert naturally.
   //
   // Only runs for concrete (non-max) amounts and when we successfully read
   // the balance. MAX_UINT256 approvals are intentionally exempt.
+  let balanceWarning: string | null = null;
+  let balanceWarningSkip: string | null = null;
   if (
     owner &&
     amountRaw !== MAX_UINT256 &&
@@ -1250,31 +1408,34 @@ export async function buildApprove(
   ) {
     const balanceDecimal = formatUnits(ownerBalance, resolved.decimals);
     const requiredDecimal = formatUnits(amountRaw, resolved.decimals);
-    throw new MantleMcpError(
-      "INSUFFICIENT_BALANCE",
-      `${resolved.symbol} balance for ${owner} is ${balanceDecimal}, ` +
-      `but the requested approve amount is ${requiredDecimal}. ` +
-      `Approving more than the owner holds is wasteful — any follow-up ` +
-      `transferFrom/swap would revert on-chain.`,
-      `Lower the amount to at most ${balanceDecimal} ${resolved.symbol}, ` +
-      `or fund ${owner} with additional ${resolved.symbol} before retrying. ` +
-      `Use mantle_getTokenBalances({ address: "${owner}", tokens: ["${resolved.symbol}"], network: "${network}" }) ` +
-      `to confirm the current on-chain ERC-20 balance ` +
-      `(note: mantle_getBalance only reads native MNT).`,
-      {
-        token: resolved.symbol,
-        token_address: resolved.address,
-        owner,
-        required: requiredDecimal,
-        current_balance: balanceDecimal,
-        spender
-      }
-    );
+    const tokenBalancesCall =
+      `mantle_getTokenBalances({ address: "${owner}", tokens: ["${resolved.symbol}"], ` +
+      `network: "${network}" })`;
+    // Used when a new approve transaction is being built.
+    balanceWarning =
+      `${resolved.symbol} balance for ${owner} is ${balanceDecimal} but the approve ` +
+      `amount is ${requiredDecimal}. The approve is valid on-chain — transferFrom will ` +
+      `only revert if the actual transfer amount exceeds the balance at execution time. ` +
+      `Fund ${owner} with additional ${resolved.symbol} before the follow-up swap/transfer ` +
+      `if needed. Use ${tokenBalancesCall} to confirm the current on-chain ERC-20 balance.`;
+    // Used when no new approve is being built (approve_skip path) — "The approve is
+    // valid on-chain" would be misleading because no approve transaction exists.
+    balanceWarningSkip =
+      `${resolved.symbol} balance for ${owner} is ${balanceDecimal} but the approve ` +
+      `amount is ${requiredDecimal}. No new approve transaction is being built — the ` +
+      `existing allowance is already sufficient. A follow-up transferFrom will revert ` +
+      `if the balance at execution time is less than the transfer amount. ` +
+      `Fund ${owner} with additional ${resolved.symbol} before the follow-up swap/transfer ` +
+      `if needed. Use ${tokenBalancesCall} to confirm the current on-chain ERC-20 balance.`;
   }
 
   // If allowance is already sufficient, skip
   if (existingAllowance !== null && existingAllowance >= amountRaw) {
     const existingDecimal = formatUnits(existingAllowance, resolved.decimals);
+    const skipWarnings: string[] = [
+      `Existing allowance ${existingDecimal} ${resolved.symbol} is sufficient. No approve transaction needed.`
+    ];
+    if (balanceWarningSkip) skipWarnings.push(balanceWarningSkip);
     return {
       intent: "approve_skip",
       human_summary: `SKIP: ${resolved.symbol} already approved for ${whitelistLabel(spender, network) ?? spender}. Current allowance: ${existingDecimal} (sufficient).`,
@@ -1284,9 +1445,7 @@ export async function buildApprove(
         value: "0x0",
         chainId: chainId(network)
       },
-      warnings: [
-        `Existing allowance ${existingDecimal} ${resolved.symbol} is sufficient. No approve transaction needed.`
-      ],
+      warnings: skipWarnings,
       built_at_utc: d.now()
     };
   }
@@ -1304,6 +1463,7 @@ export async function buildApprove(
   });
 
   const warnings: string[] = [];
+  if (balanceWarning) warnings.push(balanceWarning);
   if (amountRaw === MAX_UINT256) {
     warnings.push(
       "Unlimited approval granted. Consider using exact amounts for better security."

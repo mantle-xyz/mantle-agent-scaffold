@@ -1,4 +1,4 @@
 [submodule "skills"]
 	path = skills
 	url = https://github.com/mantle-xyz/mantle-skills.git
-	branch = dev
+	branch = hotfix/json-file-transfer

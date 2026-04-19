@@ -1,7 +1,7 @@
 {
   "name": "mantle-agent-scaffold",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.1.18",
   "license": "MIT",
   "description": "Monorepo for Mantle L2 tooling — core library, CLI, and MCP server",
   "type": "module",
