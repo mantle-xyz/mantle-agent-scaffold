@@ -1328,18 +1328,17 @@ export async function buildApprove(
 
   // Pre-check existing allowance + balance (if owner is provided).
   //
-  // Balance check rationale: if the agent is building an approve because the
-  // user wants to eventually spend `amountRaw` of this token, but the owner
-  // does NOT hold that much, then the subsequent transferFrom/swap/add-
-  // liquidity WILL revert — and the approve itself is pure waste (gas cost,
-  // on-chain footprint, and a dangling allowance). Fail-closed here so the
-  // agent never signs a doomed approve on the user's behalf.
+  // Reads allowance + balanceOf in parallel. Allowance is used for the
+  // approve_skip optimisation; balance is used for the advisory balance
+  // warning (see the "Advisory balance pre-check" block below). Both reads
+  // are best-effort via Promise.allSettled — an RPC failure on either leaves
+  // the corresponding variable null and silently skips that check.
   //
-  // Skipped when:
-  //   - no owner was provided (we cannot read balance)
-  //   - amount is MAX_UINT256 ("max"/"unlimited") — the user is explicitly
-  //     pre-approving future balances, so balance == 0 is not necessarily a
-  //     mistake. We still emit a soft warning downstream.
+  // Skipped entirely when:
+  //   - no owner was provided (we cannot read balance or allowance)
+  //   - amount is MAX_UINT256 ("max"/"unlimited") — forward approvals
+  //     are intentional; balance == 0 is not an error. A soft unlimited-
+  //     approval warning is emitted downstream instead.
   const owner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
     ? getAddress(args.owner)
     : null;
@@ -1384,16 +1383,23 @@ export async function buildApprove(
     }
   }
 
-  // Blocking balance pre-check.
+  // Advisory balance pre-check.
   //
-  // If the owner demonstrably holds less than the approve amount, we refuse
-  // to build the approve. This prevents the common agent failure mode where
-  // the user asks to swap/transfer N tokens, the agent auto-approves N
-  // without verifying the user can actually pay, and then the follow-up
-  // transferFrom reverts — leaving a useless non-zero allowance behind.
+  // ERC-20 approve() has NO on-chain requirement that amount ≤ balance —
+  // the standard only checks balance at transferFrom() time. Pre-approving
+  // more than the current balance is a legitimate and common pattern:
+  //   • Infinite / forward approvals (type(uint256).max)
+  //   • Approve-then-fund flows (approve first, top up wallet later)
+  //   • Round-number approvals slightly above current balance
+  //
+  // We emit a non-blocking warning so the agent can surface it, but we do
+  // NOT refuse to build the transaction. The chain is the final arbiter;
+  // a transferFrom with insufficient balance will revert naturally.
   //
   // Only runs for concrete (non-max) amounts and when we successfully read
   // the balance. MAX_UINT256 approvals are intentionally exempt.
+  let balanceWarning: string | null = null;
+  let balanceWarningSkip: string | null = null;
   if (
     owner &&
     amountRaw !== MAX_UINT256 &&
@@ -1402,31 +1408,34 @@ export async function buildApprove(
   ) {
     const balanceDecimal = formatUnits(ownerBalance, resolved.decimals);
     const requiredDecimal = formatUnits(amountRaw, resolved.decimals);
-    throw new MantleMcpError(
-      "INSUFFICIENT_BALANCE",
-      `${resolved.symbol} balance for ${owner} is ${balanceDecimal}, ` +
-      `but the requested approve amount is ${requiredDecimal}. ` +
-      `Approving more than the owner holds is wasteful — any follow-up ` +
-      `transferFrom/swap would revert on-chain.`,
-      `Lower the amount to at most ${balanceDecimal} ${resolved.symbol}, ` +
-      `or fund ${owner} with additional ${resolved.symbol} before retrying. ` +
-      `Use mantle_getTokenBalances({ address: "${owner}", tokens: ["${resolved.symbol}"], network: "${network}" }) ` +
-      `to confirm the current on-chain ERC-20 balance ` +
-      `(note: mantle_getBalance only reads native MNT).`,
-      {
-        token: resolved.symbol,
-        token_address: resolved.address,
-        owner,
-        required: requiredDecimal,
-        current_balance: balanceDecimal,
-        spender
-      }
-    );
+    const tokenBalancesCall =
+      `mantle_getTokenBalances({ address: "${owner}", tokens: ["${resolved.symbol}"], ` +
+      `network: "${network}" })`;
+    // Used when a new approve transaction is being built.
+    balanceWarning =
+      `${resolved.symbol} balance for ${owner} is ${balanceDecimal} but the approve ` +
+      `amount is ${requiredDecimal}. The approve is valid on-chain — transferFrom will ` +
+      `only revert if the actual transfer amount exceeds the balance at execution time. ` +
+      `Fund ${owner} with additional ${resolved.symbol} before the follow-up swap/transfer ` +
+      `if needed. Use ${tokenBalancesCall} to confirm the current on-chain ERC-20 balance.`;
+    // Used when no new approve is being built (approve_skip path) — "The approve is
+    // valid on-chain" would be misleading because no approve transaction exists.
+    balanceWarningSkip =
+      `${resolved.symbol} balance for ${owner} is ${balanceDecimal} but the approve ` +
+      `amount is ${requiredDecimal}. No new approve transaction is being built — the ` +
+      `existing allowance is already sufficient. A follow-up transferFrom will revert ` +
+      `if the balance at execution time is less than the transfer amount. ` +
+      `Fund ${owner} with additional ${resolved.symbol} before the follow-up swap/transfer ` +
+      `if needed. Use ${tokenBalancesCall} to confirm the current on-chain ERC-20 balance.`;
   }
 
   // If allowance is already sufficient, skip
   if (existingAllowance !== null && existingAllowance >= amountRaw) {
     const existingDecimal = formatUnits(existingAllowance, resolved.decimals);
+    const skipWarnings: string[] = [
+      `Existing allowance ${existingDecimal} ${resolved.symbol} is sufficient. No approve transaction needed.`
+    ];
+    if (balanceWarningSkip) skipWarnings.push(balanceWarningSkip);
     return {
       intent: "approve_skip",
       human_summary: `SKIP: ${resolved.symbol} already approved for ${whitelistLabel(spender, network) ?? spender}. Current allowance: ${existingDecimal} (sufficient).`,
@@ -1436,9 +1445,7 @@ export async function buildApprove(
         value: "0x0",
         chainId: chainId(network)
       },
-      warnings: [
-        `Existing allowance ${existingDecimal} ${resolved.symbol} is sufficient. No approve transaction needed.`
-      ],
+      warnings: skipWarnings,
       built_at_utc: d.now()
     };
   }
@@ -1456,6 +1463,7 @@ export async function buildApprove(
   });
 
   const warnings: string[] = [];
+  if (balanceWarning) warnings.push(balanceWarning);
   if (amountRaw === MAX_UINT256) {
     warnings.push(
       "Unlimited approval granted. Consider using exact amounts for better security."
