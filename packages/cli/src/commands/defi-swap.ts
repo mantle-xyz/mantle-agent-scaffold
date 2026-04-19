@@ -32,7 +32,21 @@ export function registerSwap(parent: Command): void {
     .requiredOption("--out <token>", "output token symbol or address")
     .requiredOption("--amount <amount>", "human-readable amount of input token")
     .requiredOption("--recipient <address>", "address to receive output tokens")
-    .option("--amount-out-min <amount>", "minimum output (raw units from swap-quote). '0' if unknown (not recommended)")
+    .option(
+      "--minimum-out <amount>",
+      [
+        "Minimum acceptable output amount. Accepts either:",
+        "  • raw integer units   — copy 'minimum_out_raw' from swap-quote verbatim",
+        "  • decimal string      — e.g. '0.000212195471425023'",
+        "RECOMMENDED: --minimum-out <minimum_out_raw from swap-quote>",
+        "Example: --minimum-out 212195471425023",
+        "      or: --minimum-out 0.000212195471425023"
+      ].join("\n")
+    )
+    .option(
+      "--amount-out-min <amount>",
+      "(alias for --minimum-out, kept for backward compatibility)"
+    )
     .option(
       "--slippage-bps <bps>",
       "slippage tolerance in basis points (default: 50 = 0.5%)",
@@ -65,13 +79,16 @@ export function registerSwap(parent: Command): void {
     )
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
+      // --minimum-out is the canonical flag; --amount-out-min is a backward-
+      // compatible alias. Prefer minimumOut when both are provided.
+      const amountOutMinRaw = opts.minimumOut ?? opts.amountOutMin;
       const result = await allTools["mantle_buildSwap"].handler({
         provider: opts.provider,
         token_in: opts.in,
         token_out: opts.out,
         amount_in: String(opts.amount),
         recipient: opts.recipient,
-        amount_out_min: opts.amountOutMin ? String(opts.amountOutMin) : undefined,
+        amount_out_min: amountOutMinRaw ? String(amountOutMinRaw) : undefined,
         slippage_bps: opts.slippageBps,
         fee_tier: opts.feeTier,
         bin_step: opts.binStep,
@@ -201,6 +218,12 @@ function formatSwapResult(data: Record<string, unknown>): void {
     if (poolParams.bin_step != null) {
       extraFields.push({ key: "pool_bin_step", label: "Pool Bin Step", value: poolParams.bin_step });
     }
+  }
+  const sp = data.slippage_protection as Record<string, unknown> | undefined;
+  if (sp) {
+    extraFields.push({ key: "sp_input", label: "Min-Out Input", value: sp.input_raw_or_decimal });
+    extraFields.push({ key: "sp_raw", label: "Min-Out Raw", value: sp.resolved_raw });
+    extraFields.push({ key: "sp_decimal", label: "Min-Out Decimal", value: sp.resolved_decimal });
   }
   formatUnsignedTx(data, { extraFields });
 }

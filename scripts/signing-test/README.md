@@ -15,9 +15,10 @@ verifies on-chain state via the same CLI.
 ```
 scripts/signing-test/
 ├── src/
-│   ├── scenario-swap.ts   ← wrap/unwrap, Agni V3 swap, Moe LB swap
-│   ├── scenario-lp.ts     ← Agni V3 add/collect/remove + Moe LB add/remove
-│   ├── scenario-aave.ts   ← supply / borrow / repay / withdraw on Aave
+│   ├── scenario-swap.ts      ← wrap/unwrap, Agni V3 swap, Moe LB swap
+│   ├── scenario-moe-swap.ts  ← Moe multi-version roundtrip (V2.2 direct / V2.2 auto / V1 AMM)
+│   ├── scenario-lp.ts        ← Agni V3 add/collect/remove + Moe LB add/remove
+│   ├── scenario-aave.ts      ← supply / borrow / repay / withdraw on Aave
 │   ├── runner.ts          ← test harness (PASS/FAIL + tx-hash reporting)
 │   ├── cli.ts             ← spawns mantle-cli as a child process, parses JSON
 │   ├── wallet.ts          ← viem WalletClient + signAndSend (with dry-run)
@@ -73,11 +74,13 @@ Always start there to validate CLI output before spending gas:
 ```bash
 # Dry runs — no signing, no broadcast, no MNT needed
 npm run test:swap:dry
+npm run test:moe-swap:dry
 npm run test:lp:dry
 npm run test:aave:dry
 
 # Live runs — signs and broadcasts on Mantle mainnet
 npm run test:swap
+npm run test:moe-swap
 npm run test:lp
 npm run test:aave
 ```
@@ -91,11 +94,12 @@ DRY_RUN=true TEST_PRIVATE_KEY=0x… npm run test:lp:dry  # equivalent to test:lp
 
 ### Wallet funding cheat-sheet
 
-| Scenario | Needed in wallet                                          | Approx total gas |
-|----------|-----------------------------------------------------------|------------------|
-| swap     | ~1 MNT                                                    | ≤ $0.05          |
-| lp       | ~1 MNT + ~$0.05 USDe (or whatever the scenario LPs)       | ≤ $0.20          |
-| aave     | ~1 MNT + a few cents of a supply asset (USDC by default)  | ≤ $0.10          |
+| Scenario  | Needed in wallet                                          | Approx total gas |
+|-----------|-----------------------------------------------------------|------------------|
+| swap      | ~1 MNT                                                    | ≤ $0.05          |
+| moe-swap  | ~0.2 MNT (three small roundtrips on Moe)                  | ≤ $0.05          |
+| lp        | ~1 MNT + ~$0.05 USDe (or whatever the scenario LPs)       | ≤ $0.20          |
+| aave      | ~1 MNT + a few cents of a supply asset (USDC by default)  | ≤ $0.10          |
 
 The exact amounts are constants at the top of each scenario (`WRAP_AMOUNT`,
 `AGNI_LP_*`, `MOE_LP_*`, etc.) — tweak them if MNT price moves materially.

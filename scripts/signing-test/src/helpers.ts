@@ -33,6 +33,7 @@ import {
   USDT,
   USDT0,
   USDe,
+  MOE,
 } from "./constants.js";
 
 export const DRY_RUN = process.env.DRY_RUN === "true";
@@ -126,13 +127,14 @@ export async function approveIfNeeded(
 
 export async function printBalances(wallet: TestWallet, title: string): Promise<void> {
   console.log(chalk.cyan(`\n${title}`));
-  const [mnt, wmnt, usdc, usdt, usdt0, usde] = await Promise.all([
+  const [mnt, wmnt, usdc, usdt, usdt0, usde, moe] = await Promise.all([
     getBalance(wallet),
     readBalance(wallet, WMNT),
     readBalance(wallet, USDC),
     readBalance(wallet, USDT),
     readBalance(wallet, USDT0),
     readBalance(wallet, USDe),
+    readBalance(wallet, MOE),
   ]);
   console.log(chalk.green(`  MNT:   ${formatMNT(mnt)}`));
   console.log(chalk.green(`  WMNT:  ${formatEther(wmnt)}`));
@@ -140,6 +142,7 @@ export async function printBalances(wallet: TestWallet, title: string): Promise<
   console.log(chalk.green(`  USDT:  ${formatUnits(usdt, 6)}`));
   console.log(chalk.green(`  USDT0: ${formatUnits(usdt0, 6)}`));
   console.log(chalk.green(`  USDe:  ${formatEther(usde)}`));
+  console.log(chalk.green(`  MOE:   ${formatEther(moe)}`));
 }
 
 // ---------------------------------------------------------------------------

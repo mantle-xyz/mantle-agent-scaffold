@@ -12,6 +12,7 @@ export const USDC = "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9" as const;
 export const USDT = "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE" as const;
 export const USDT0 = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736" as const;
 export const USDe = "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34" as const;
+export const MOE = "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9" as const;
 
 export const TOKEN_DECIMALS: Record<string, number> = {
   [WMNT]: 18,
@@ -19,6 +20,7 @@ export const TOKEN_DECIMALS: Record<string, number> = {
   [USDT]: 6,
   [USDT0]: 6,
   [USDe]: 18,
+  [MOE]: 18,
 };
 
 export const TOKEN_SYMBOL: Record<string, string> = {
@@ -27,6 +29,7 @@ export const TOKEN_SYMBOL: Record<string, string> = {
   [USDT]: "USDT",
   [USDT0]: "USDT0",
   [USDe]: "USDe",
+  [MOE]: "MOE",
 };
 
 // --- Whitelisted protocol contracts -----------------------------------------

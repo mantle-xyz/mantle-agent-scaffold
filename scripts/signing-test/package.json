@@ -7,6 +7,8 @@
   "scripts": {
     "test:swap":      "node --env-file-if-exists=.env --import tsx src/scenario-swap.ts",
     "test:swap:dry":  "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-swap.ts",
+    "test:moe-swap":     "node --env-file-if-exists=.env --import tsx src/scenario-moe-swap.ts",
+    "test:moe-swap:dry": "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-moe-swap.ts",
     "test:lp":        "node --env-file-if-exists=.env --import tsx src/scenario-lp.ts",
     "test:lp:dry":    "DRY_RUN=true node --env-file-if-exists=.env --import tsx src/scenario-lp.ts",
     "test:aave":      "node --env-file-if-exists=.env --import tsx src/scenario-aave.ts",
