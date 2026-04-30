@@ -6,6 +6,11 @@ import { ERC20_ABI } from "../lib/abis/erc20.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { fetchTokenListSnapshot, type TokenListSnapshot } from "../lib/token-list.js";
 import {
+  crossValidatePrices,
+  type PriceRawSources,
+  type PriceValidation
+} from "../lib/price-oracle.js";
+import {
   findTokenBySymbol,
   resolveTokenInput as resolveTokenFromQuickRef,
   type ResolvedTokenInput
@@ -332,130 +337,6 @@ async function fetchCoinGeckoTokenPrices(
 /* ------------------------------------------------------------------ */
 /*  Cross-source price validation                                       */
 /* ------------------------------------------------------------------ */
-
-/** Thresholds for inter-source price agreement. */
-const PRICE_AGREE_PCT = 0.03;  // ≤3 %  → high confidence
-const PRICE_WARN_PCT  = 0.15;  // ≤15 % → medium confidence; above → low
-
-interface PriceRawSources {
-  coingecko: number | null;
-  dexscreener: number | null;
-  defillama: number | null;
-}
-
-interface PriceValidation {
-  price: number | null;
-  source: "coingecko" | "dexscreener" | "defillama" | "aggregate" | "none";
-  confidence: "high" | "medium" | "low";
-  warnings: string[];
-  price_sources: PriceRawSources;
-}
-
-/**
- * Select the best available price using CoinGecko as primary.
- * Cross-validates against DexScreener and DefiLlama; emits confidence and
- * warnings reflecting how well sources agree.
- */
-function crossValidatePrices(
-  coingecko: number | null,
-  dexscreener: number | null,
-  defillama: number | null
-): PriceValidation {
-  const price_sources: PriceRawSources = { coingecko, dexscreener, defillama };
-  const fmt = (n: number) => `$${n.toPrecision(6)}`;
-  const pct = (d: number) => `${(d * 100).toFixed(1)}%`;
-
-  // ── CoinGecko is available ───────────────────────────────────────────────
-  if (coingecko != null) {
-    const secondaries = [
-      { name: "DexScreener", value: dexscreener },
-      { name: "DefiLlama",   value: defillama   }
-    ].filter((s): s is { name: string; value: number } => s.value != null);
-
-    if (secondaries.length === 0) {
-      return {
-        price: coingecko, source: "coingecko", confidence: "medium",
-        warnings: ["CoinGecko price unverified — secondary sources returned no data."],
-        price_sources
-      };
-    }
-
-    const maxDev = Math.max(
-      ...secondaries.map((s) => Math.abs(coingecko - s.value) / coingecko)
-    );
-
-    if (maxDev <= PRICE_AGREE_PCT) {
-      return { price: coingecko, source: "coingecko", confidence: "high", warnings: [], price_sources };
-    }
-
-    if (maxDev <= PRICE_WARN_PCT) {
-      const worst = secondaries.reduce((a, b) =>
-        Math.abs(coingecko - a.value) >= Math.abs(coingecko - b.value) ? a : b
-      );
-      return {
-        price: coingecko, source: "coingecko", confidence: "medium",
-        warnings: [
-          `Price sources diverge by ${pct(maxDev)} ` +
-          `(CoinGecko ${fmt(coingecko)} vs ${worst.name} ${fmt(worst.value)}) — using CoinGecko as primary.`
-        ],
-        price_sources
-      };
-    }
-
-    // > PRICE_WARN_PCT — significant divergence
-    const details = secondaries
-      .map((s) => `${s.name}: ${fmt(s.value)}`)
-      .join(", ");
-    return {
-      price: coingecko, source: "coingecko", confidence: "low",
-      warnings: [
-        `Significant price divergence (${pct(maxDev)}): CoinGecko ${fmt(coingecko)}, ${details}. ` +
-        `Using CoinGecko; verify the token's liquidity before acting.`
-      ],
-      price_sources
-    };
-  }
-
-  // ── CoinGecko unavailable — fall back ────────────────────────────────────
-  if (dexscreener != null && defillama != null) {
-    const dev = Math.abs(dexscreener - defillama) / dexscreener;
-    if (dev <= PRICE_AGREE_PCT) {
-      return {
-        price: dexscreener, source: "dexscreener", confidence: "medium",
-        warnings: ["CoinGecko unavailable; DexScreener and DefiLlama agree."],
-        price_sources
-      };
-    }
-    // Weighted average (equal weight) as best estimate when two secondaries disagree
-    const avg = (dexscreener + defillama) / 2;
-    return {
-      price: avg, source: "aggregate", confidence: "low",
-      warnings: [
-        `CoinGecko unavailable; DexScreener (${fmt(dexscreener)}) and DefiLlama (${fmt(defillama)}) ` +
-        `diverge by ${pct(dev)} — using their average.`
-      ],
-      price_sources
-    };
-  }
-
-  if (dexscreener != null) {
-    return {
-      price: dexscreener, source: "dexscreener", confidence: "low",
-      warnings: ["CoinGecko unavailable; using DexScreener as sole source."],
-      price_sources
-    };
-  }
-
-  if (defillama != null) {
-    return {
-      price: defillama, source: "defillama", confidence: "low",
-      warnings: ["CoinGecko unavailable; using DefiLlama as sole source."],
-      price_sources
-    };
-  }
-
-  return { price: null, source: "none", confidence: "low", warnings: [], price_sources };
-}
 
 type ConfidenceLevel = "high" | "medium" | "low";
 

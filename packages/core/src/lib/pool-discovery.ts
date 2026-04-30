@@ -48,6 +48,7 @@ export interface DiscoveredPool {
   feeTier: number;
   poolAddress: string;
   liquidity: bigint;
+  liquidityRank?: number;
 }
 
 /** Minimal viem-compatible multicall client. */
@@ -73,7 +74,8 @@ export async function discoverBestV3Pool(
   client: MulticallClient,
   factory: `0x${string}`,
   tokenA: `0x${string}`,
-  tokenB: `0x${string}`
+  tokenB: `0x${string}`,
+  options: { minLiquidityThreshold?: bigint } = {}
 ): Promise<DiscoveredPool | null> {
   const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
@@ -112,19 +114,21 @@ export async function discoverBestV3Pool(
 
   const liqResults = await client.multicall({ contracts: liqCalls });
 
-  let best: DiscoveredPool | null = null;
+  const candidates: DiscoveredPool[] = [];
   for (let i = 0; i < existingPools.length; i++) {
     const liq = liqResults[i].status === "success" ? (liqResults[i].result as bigint) : 0n;
-    if (liq > 0n && (best === null || liq > best.liquidity)) {
-      best = {
+    if (liq > 0n) {
+      candidates.push({
         feeTier: existingPools[i].fee,
         poolAddress: existingPools[i].poolAddress,
         liquidity: liq
-      };
+      });
     }
   }
 
-  return best;
+  candidates.sort((a, b) => (a.liquidity > b.liquidity ? -1 : a.liquidity < b.liquidity ? 1 : 0));
+  const ranked = candidates.map((pool, index) => ({ ...pool, liquidityRank: index + 1 }));
+  return ranked.find((pool) => pool.liquidity >= (options.minLiquidityThreshold ?? 1n)) ?? null;
 }
 
 /**
@@ -179,11 +183,15 @@ export async function discoverAllV3Pools(
       pools.push({
         feeTier: existingPools[i].fee,
         poolAddress: existingPools[i].poolAddress,
-        liquidity: liq
+        liquidity: liq,
+        liquidityRank: 0
       });
     }
   }
 
   pools.sort((a, b) => (a.liquidity > b.liquidity ? -1 : a.liquidity < b.liquidity ? 1 : 0));
+  pools.forEach((pool, index) => {
+    pool.liquidityRank = index + 1;
+  });
   return pools;
 }

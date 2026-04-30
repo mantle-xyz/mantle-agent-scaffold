@@ -10,6 +10,10 @@ import { AAVE_V3_POOL_ABI } from "../lib/abis/aave-v3-pool.js";
 import { V3_QUOTER_V2_ABI } from "../lib/abis/uniswap-v3.js";
 import { LB_QUOTER_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { discoverBestV3Pool } from "../lib/pool-discovery.js";
+import {
+  getCrossValidatedPrice,
+  type PriceValidation
+} from "../lib/price-oracle.js";
 import { listAllPairs } from "../config/dex-pairs.js";
 import dexscreenerPoolsJson from "../config/dexscreener-pools.json" with { type: "json" };
 
@@ -42,6 +46,10 @@ interface SwapQuoteDeps {
       route_path?: string[];
     };
   } | null>;
+  getCrossValidatedPrice: (
+    network: "mainnet" | "sepolia",
+    tokenAddress: string
+  ) => Promise<PriceValidation>;
   now: () => string;
 }
 
@@ -1223,6 +1231,7 @@ const defaultSwapDeps: SwapQuoteDeps = {
     }
     return fallbackResult;
   },
+  getCrossValidatedPrice,
   now: () => new Date().toISOString()
 };
 
@@ -1727,6 +1736,32 @@ function parseRawAmount(value: string, field: string, details: Record<string, un
   }
 }
 
+function sourceSummary(validation: PriceValidation): string {
+  const sources = validation.price_sources;
+  return Object.entries(sources)
+    .filter(([, value]) => typeof value === "number")
+    .map(([name, value]) => `${name}=$${(value as number).toPrecision(6)}`)
+    .join(", ") || "none";
+}
+
+function slippageThresholds(confidence: PriceValidation["confidence"]): {
+  warn: number;
+  extreme: number | null;
+} {
+  if (confidence === "high") return { warn: 5, extreme: 20 };
+  if (confidence === "medium") return { warn: 8, extreme: 25 };
+  return { warn: 15, extreme: 40 };
+}
+
+function rawAmountFromDecimal(decimalAmount: number, decimals: number): bigint | null {
+  if (!Number.isFinite(decimalAmount) || decimalAmount <= 0) return null;
+  try {
+    return parseUnits(decimalAmount.toFixed(Math.min(decimals, 18)), decimals);
+  } catch {
+    return null;
+  }
+}
+
 export async function getSwapQuote(
   args: Record<string, unknown>,
   deps?: Partial<SwapQuoteDeps>
@@ -1979,6 +2014,62 @@ export async function getSwapQuote(
     token_out: tokenOut.address
   });
   const minimumOutRaw = (estimatedOutRaw * 9950n) / 10000n;
+  let slippagePct: number | null = null;
+  let fairMarketOutRaw: bigint | null = null;
+  let fairMarketOutDecimal: string | null = null;
+  let priceConfidence: PriceValidation["confidence"] | null = null;
+
+  const [tokenInPrice, tokenOutPrice] = await Promise.all([
+    resolvedDeps.getCrossValidatedPrice(network, tokenIn.address),
+    resolvedDeps.getCrossValidatedPrice(network, tokenOut.address)
+  ]);
+  warnings.push(
+    ...tokenInPrice.warnings.map((warning) => `${tokenIn.symbol} price: ${warning}`),
+    ...tokenOutPrice.warnings.map((warning) => `${tokenOut.symbol} price: ${warning}`)
+  );
+
+  if (
+    tokenInPrice.price != null &&
+    tokenInPrice.price > 0 &&
+    tokenOutPrice.price != null &&
+    tokenOutPrice.price > 0
+  ) {
+    const amountInDecimalNumber = Number(formatUnits(amountInRaw, tokenIn.decimals));
+    const fairMarketOut = (amountInDecimalNumber * tokenInPrice.price) / tokenOutPrice.price;
+    fairMarketOutRaw = rawAmountFromDecimal(fairMarketOut, tokenOut.decimals);
+    if (fairMarketOutRaw != null && fairMarketOutRaw > 0n) {
+      fairMarketOutDecimal = formatUnits(fairMarketOutRaw, tokenOut.decimals);
+      if (fairMarketOutRaw > estimatedOutRaw) {
+        slippagePct = Number(((fairMarketOutRaw - estimatedOutRaw) * 10000n) / fairMarketOutRaw) / 100;
+      } else {
+        slippagePct = 0;
+      }
+      priceConfidence =
+        tokenInPrice.confidence === "low" || tokenOutPrice.confidence === "low"
+          ? "low"
+          : tokenInPrice.confidence === "medium" || tokenOutPrice.confidence === "medium"
+            ? "medium"
+            : "high";
+      const thresholds = slippageThresholds(priceConfidence);
+      if (slippagePct > thresholds.warn) {
+        warnings.push(
+          `HIGH SLIPPAGE: This swap loses ${slippagePct.toFixed(2)}% vs fair market price. ` +
+          `Fair market output: ${fairMarketOutDecimal} ${tokenOut.symbol}. ` +
+          `Quoted output: ${formatUnits(estimatedOutRaw, tokenOut.decimals)} ${tokenOut.symbol}. ` +
+          `Price confidence: ${priceConfidence} (sources: ${tokenIn.symbol}: ${sourceSummary(tokenInPrice)}; ` +
+          `${tokenOut.symbol}: ${sourceSummary(tokenOutPrice)}). ` +
+          `Consider using a DEX with deeper liquidity for this pair.`
+        );
+      }
+      if (thresholds.extreme != null && slippagePct > thresholds.extreme) {
+        warnings.push(
+          `EXTREME SLIPPAGE WARNING: ${slippagePct.toFixed(2)}% value loss detected. ` +
+          `This is likely due to very low pool liquidity. ` +
+          `STRONGLY RECOMMENDED: Try a different pool or reduce trade size.`
+        );
+      }
+    }
+  }
 
   if (quote.price_impact_pct != null && quote.price_impact_pct > 1) {
     warnings.push("High price impact.");
@@ -2017,6 +2108,10 @@ export async function getSwapQuote(
     minimum_out_raw: minimumOutRaw.toString(),
     minimum_out_decimal: formatUnits(minimumOutRaw, tokenOut.decimals),
     price_impact_pct: quote.price_impact_pct,
+    slippage_pct: slippagePct,
+    fair_market_out_raw: fairMarketOutRaw?.toString() ?? null,
+    fair_market_out_decimal: fairMarketOutDecimal,
+    price_confidence: priceConfidence,
     route: quote.route,
     router_address: routerAddress,
     fee_tier: quote.fee_tier,

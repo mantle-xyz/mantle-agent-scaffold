@@ -32,202 +32,6 @@ import {
 import type { Tool, Network } from "../types.js";
 import { CHAIN_CONFIGS } from "../config/chains.js";
 
-// Price fetch helpers for USD-based amount mode
-const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
-const DEFILLAMA_PRICES_API_BASE = "https://coins.llama.fi/prices/current";
-const COINGECKO_API_BASE = "https://api.coingecko.com/api/v3";
-const COINGECKO_PRO_API_BASE = "https://pro-api.coingecko.com/api/v3";
-
-// Cross-source price agreement thresholds (must match token.ts).
-const PRICE_AGREE_PCT = 0.03; //  ≤3%  → high confidence
-const PRICE_WARN_PCT = 0.15; // ≤15% → medium; above → low
-
-async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
-  return fetchJsonWithHeaders(url, { accept: "application/json" }, timeoutMs);
-}
-
-async function fetchJsonWithHeaders(
-  url: string,
-  headers: Record<string, string>,
-  timeoutMs = 8000
-): Promise<any | null> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let retryable = false;
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        headers,
-        signal: controller.signal
-      });
-      if (response.ok) return await response.json();
-      // Client errors (4xx) won't be fixed by retrying
-      if (response.status >= 400 && response.status < 500) return null;
-      // Server errors (5xx) fall through to retry
-      retryable = true;
-    } catch {
-      // Network error or timeout — fall through to retry
-      retryable = true;
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!retryable || attempt === 2) break;
-    await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
-  }
-  return null;
-}
-
-/**
- * Fetch USD price from DexScreener, preferring pairs where the token is the
- * baseToken and sorting by liquidity.usd to avoid low-liquidity manipulated pairs.
- */
-async function fetchDexScreenerPriceUsd(tokenAddress: string): Promise<number | null> {
-  const dsPayload = await fetchJsonSafe(
-    `${DEXSCREENER_API_BASE}/tokens/v1/mantle/${tokenAddress}`
-  );
-  if (!Array.isArray(dsPayload) || dsPayload.length === 0) return null;
-
-  const addrLower = tokenAddress.toLowerCase();
-  const baseMatches = dsPayload.filter(
-    (p: any) => p.baseToken?.address?.toLowerCase() === addrLower
-  );
-  const candidates: any[] = baseMatches.length > 0 ? baseMatches : dsPayload;
-  const sorted = [...candidates].sort((a: any, b: any) => {
-    const toNum = (v: unknown) => {
-      const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-      return Number.isFinite(n) ? n : 0;
-    };
-    return toNum(b.liquidity?.usd) - toNum(a.liquidity?.usd);
-  });
-  for (const p of sorted) {
-    const price = typeof p.priceUsd === "string" ? Number(p.priceUsd) : null;
-    if (price != null && Number.isFinite(price) && price > 0) return price;
-  }
-  return null;
-}
-
-/** Fetch USD price from DefiLlama. */
-async function fetchDefiLlamaPriceUsd(tokenAddress: string): Promise<number | null> {
-  const key = `mantle:${tokenAddress.toLowerCase()}`;
-  const llamaPayload = await fetchJsonSafe(`${DEFILLAMA_PRICES_API_BASE}/${key}`);
-  const coin = llamaPayload?.coins?.[key];
-  if (coin?.price && Number.isFinite(coin.price) && coin.price > 0) return coin.price;
-  return null;
-}
-
-/**
- * Fetch USD price from CoinGecko with Pro/Demo tier auto-detection:
- *   COINGECKO_PRO_API_KEY  → Pro base + `x-cg-pro-api-key` header
- *   COINGECKO_DEMO_API_KEY / COINGECKO_API_KEY → public base + `x-cg-demo-api-key` header
- *   no key → free public API (low rate limit)
- */
-async function fetchCoinGeckoPriceUsd(tokenAddress: string): Promise<number | null> {
-  const addr = tokenAddress.toLowerCase();
-  const env = typeof process !== "undefined" ? process.env : undefined;
-  const proKey = env?.COINGECKO_PRO_API_KEY;
-  const demoKey = env?.COINGECKO_DEMO_API_KEY ?? env?.COINGECKO_API_KEY;
-
-  const base = proKey ? COINGECKO_PRO_API_BASE : COINGECKO_API_BASE;
-  const url = `${base}/simple/token_price/mantle?contract_addresses=${addr}&vs_currencies=usd`;
-  const headers: Record<string, string> = { accept: "application/json" };
-  if (proKey) headers["x-cg-pro-api-key"] = proKey;
-  else if (demoKey) headers["x-cg-demo-api-key"] = demoKey;
-
-  const payload = await fetchJsonWithHeaders(url, headers, 10000);
-  const entry = payload?.[addr];
-  const price = typeof entry?.usd === "number" && Number.isFinite(entry.usd) ? entry.usd : null;
-  return price != null && price > 0 ? price : null;
-}
-
-/**
- * Fetch and cross-validate a token's USD price using CoinGecko (primary),
- * DexScreener, and DefiLlama. Mirrors the algorithm in token.ts but with a
- * `number | null` return signature to avoid breaking existing callers in the
- * write path.
- *
- * Warnings on divergence / missing sources are logged via console.warn so they
- * are visible in server logs — the caller still receives a numeric price
- * whenever at least one source was reachable.
- *
- * Returns `null` when all three sources fail, preserving the existing
- * `PRICE_UNAVAILABLE` error path for USD-amount mode.
- */
-async function fetchTokenPriceUsd(
-  network: Network,
-  tokenAddress: string
-): Promise<number | null> {
-  if (network !== "mainnet") return null;
-
-  const [coingecko, dexscreener, defillama] = await Promise.all([
-    fetchCoinGeckoPriceUsd(tokenAddress).catch(() => null),
-    fetchDexScreenerPriceUsd(tokenAddress).catch(() => null),
-    fetchDefiLlamaPriceUsd(tokenAddress).catch(() => null)
-  ]);
-
-  const fmt = (n: number) => `$${n.toPrecision(6)}`;
-  const pct = (d: number) => `${(d * 100).toFixed(1)}%`;
-
-  // ── CoinGecko available: primary source with divergence checks ─────────
-  if (coingecko != null) {
-    const secondaries = [
-      { name: "DexScreener", value: dexscreener },
-      { name: "DefiLlama", value: defillama }
-    ].filter((s): s is { name: string; value: number } => s.value != null);
-
-    if (secondaries.length === 0) {
-      console.warn(
-        `[defi-write:price] ${tokenAddress} CoinGecko ${fmt(coingecko)} — secondary sources unavailable; unverified.`
-      );
-      return coingecko;
-    }
-
-    const maxDev = Math.max(
-      ...secondaries.map((s) => Math.abs(coingecko - s.value) / coingecko)
-    );
-    if (maxDev > PRICE_AGREE_PCT) {
-      const details = secondaries.map((s) => `${s.name}: ${fmt(s.value)}`).join(", ");
-      const level = maxDev <= PRICE_WARN_PCT ? "medium" : "low";
-      console.warn(
-        `[defi-write:price] ${tokenAddress} divergence ${pct(maxDev)} (${level} confidence): ` +
-          `CoinGecko ${fmt(coingecko)}, ${details} — using CoinGecko.`
-      );
-    }
-    return coingecko;
-  }
-
-  // ── CoinGecko unavailable: fall back to secondaries ─────────────────────
-  if (dexscreener != null && defillama != null) {
-    const dev = Math.abs(dexscreener - defillama) / dexscreener;
-    if (dev <= PRICE_AGREE_PCT) {
-      console.warn(
-        `[defi-write:price] ${tokenAddress} CoinGecko unavailable; DS ${fmt(dexscreener)} ~ DL ${fmt(defillama)}.`
-      );
-      return dexscreener;
-    }
-    const avg = (dexscreener + defillama) / 2;
-    console.warn(
-      `[defi-write:price] ${tokenAddress} CoinGecko unavailable; DS ${fmt(dexscreener)} vs DL ${fmt(defillama)} ` +
-        `diverge ${pct(dev)} — using average ${fmt(avg)} (low confidence).`
-    );
-    return avg;
-  }
-
-  if (dexscreener != null) {
-    console.warn(
-      `[defi-write:price] ${tokenAddress} only DexScreener ${fmt(dexscreener)} available (low confidence).`
-    );
-    return dexscreener;
-  }
-  if (defillama != null) {
-    console.warn(
-      `[defi-write:price] ${tokenAddress} only DefiLlama ${fmt(defillama)} available (low confidence).`
-    );
-    return defillama;
-  }
-
-  return null;
-}
 import {
   findReserveBySymbol,
   findReserveByUnderlying,
@@ -253,6 +57,25 @@ import {
   discoverBestV3Pool as discoverBestV3PoolShared,
   type DiscoveredPool
 } from "../lib/pool-discovery.js";
+import {
+  getCrossValidatedPrice,
+  type PriceValidation
+} from "../lib/price-oracle.js";
+
+/**
+ * Fetch and cross-validate a token's USD price through the shared oracle.
+ * Returns `null` when all sources fail, preserving USD-amount error handling.
+ */
+async function fetchTokenPriceUsd(
+  network: Network,
+  tokenAddress: string
+): Promise<number | null> {
+  const validation = await getCrossValidatedPrice(network, tokenAddress);
+  for (const warning of validation.warnings) {
+    console.warn(`[defi-write:price] ${tokenAddress} ${warning}`);
+  }
+  return validation.price;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -319,6 +142,10 @@ interface DefiWriteDeps {
   ) => Promise<ResolvedTokenInput> | ResolvedTokenInput;
   now: () => string;
   deadline: () => bigint;
+  getCrossValidatedPrice: (
+    network: Network,
+    tokenAddress: string
+  ) => Promise<PriceValidation>;
 }
 
 const defaultDeps: DefiWriteDeps = {
@@ -327,11 +154,113 @@ const defaultDeps: DefiWriteDeps = {
     resolveTokenInputFromRegistry(token, network ?? "mainnet"),
   now: () => new Date().toISOString(),
   deadline: () =>
-    BigInt(Math.floor(Date.now() / 1000) + DEFAULT_DEADLINE_SECONDS)
+    BigInt(Math.floor(Date.now() / 1000) + DEFAULT_DEADLINE_SECONDS),
+  getCrossValidatedPrice
 };
 
 function withDeps(overrides?: Partial<DefiWriteDeps>): DefiWriteDeps {
+  if (overrides && overrides.getCrossValidatedPrice == null) {
+    return {
+      ...defaultDeps,
+      getCrossValidatedPrice: async () => ({
+        price: null,
+        source: "none",
+        confidence: "low",
+        warnings: [],
+        price_sources: { coingecko: null, dexscreener: null, defillama: null }
+      }),
+      ...overrides
+    };
+  }
   return { ...defaultDeps, ...overrides };
+}
+
+function combinedPriceConfidence(
+  input: PriceValidation["confidence"],
+  output: PriceValidation["confidence"]
+): PriceValidation["confidence"] {
+  if (input === "low" || output === "low") return "low";
+  if (input === "medium" || output === "medium") return "medium";
+  return "high";
+}
+
+async function validateSwapValueGuard(params: {
+  d: DefiWriteDeps;
+  network: Network;
+  tokenIn: ResolvedToken;
+  tokenOut: ResolvedToken;
+  amountInRaw: bigint;
+  amountOutMin: bigint;
+  warnings: string[];
+}): Promise<void> {
+  const { d, network, tokenIn, tokenOut, amountInRaw, amountOutMin, warnings } = params;
+  if (amountOutMin <= 0n) return;
+
+  let tokenInPrice: PriceValidation;
+  let tokenOutPrice: PriceValidation;
+  try {
+    [tokenInPrice, tokenOutPrice] = await Promise.race([
+      Promise.all([
+        d.getCrossValidatedPrice(network, tokenIn.address),
+        d.getCrossValidatedPrice(network, tokenOut.address)
+      ]),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("price guard timed out")), 8000)
+      )
+    ]);
+  } catch {
+    warnings.push(
+      "PRICE CHECK UNAVAILABLE: Could not cross-check amount_out_min against fair market price before building."
+    );
+    return;
+  }
+  warnings.push(
+    ...tokenInPrice.warnings.map((warning) => `${tokenIn.symbol} price: ${warning}`),
+    ...tokenOutPrice.warnings.map((warning) => `${tokenOut.symbol} price: ${warning}`)
+  );
+
+  if (
+    tokenInPrice.price == null ||
+    tokenInPrice.price <= 0 ||
+    tokenOutPrice.price == null ||
+    tokenOutPrice.price <= 0
+  ) {
+    return;
+  }
+
+  const inputValueUsd = Number(formatUnits(amountInRaw, tokenIn.decimals)) * tokenInPrice.price;
+  const outputValueUsd = Number(formatUnits(amountOutMin, tokenOut.decimals)) * tokenOutPrice.price;
+  if (!Number.isFinite(inputValueUsd) || !Number.isFinite(outputValueUsd) || inputValueUsd <= 0) {
+    return;
+  }
+
+  const derivedSlippagePct = Math.max(0, ((inputValueUsd - outputValueUsd) / inputValueUsd) * 100);
+  const confidence = combinedPriceConfidence(tokenInPrice.confidence, tokenOutPrice.confidence);
+  const warningThreshold = confidence === "low" ? 15 : confidence === "medium" ? 8 : 5;
+
+  if (derivedSlippagePct > 30) {
+    throw new MantleMcpError(
+      "EXTREME_SLIPPAGE_REJECTED",
+      `Swap rejected: amount_out_min implies ${derivedSlippagePct.toFixed(2)}% value loss versus fair market price.`,
+      `Re-run mantle_getSwapQuote, choose a DEX/pool with deeper liquidity, or reduce trade size before building this swap.`,
+      {
+        token_in: tokenIn.symbol,
+        token_out: tokenOut.symbol,
+        input_value_usd: inputValueUsd,
+        minimum_output_value_usd: outputValueUsd,
+        derived_slippage_pct: derivedSlippagePct,
+        price_confidence: confidence
+      }
+    );
+  }
+
+  if (derivedSlippagePct > warningThreshold) {
+    warnings.push(
+      `HIGH SLIPPAGE: amount_out_min implies ${derivedSlippagePct.toFixed(2)}% value loss vs fair market price. ` +
+      `Input value: $${inputValueUsd.toFixed(2)}. Minimum output value: $${outputValueUsd.toFixed(2)}. ` +
+      `Price confidence: ${confidence}. Consider re-quoting or using deeper liquidity.`
+    );
+  }
 }
 
 /**
@@ -1921,6 +1850,15 @@ export async function buildSwap(
   const swapWarnings: string[] = [];
   const swSepolia = sepoliaWarning(network);
   if (swSepolia) swapWarnings.push(swSepolia);
+  await validateSwapValueGuard({
+    d,
+    network,
+    tokenIn,
+    tokenOut,
+    amountInRaw,
+    amountOutMin,
+    warnings: swapWarnings
+  });
   const swapOwner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
     ? getAddress(args.owner)
     : null;
